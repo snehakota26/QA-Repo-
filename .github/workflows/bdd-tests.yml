@@ -22,7 +22,9 @@ jobs:
         run: npx playwright install --with-deps
       # Non-@integration scenarios only - no live Azure/MCP dependencies required
       - name: Run BDD scenarios
-        run: npx cucumber-js specs --require specs/support --require specs/steps --tags "not @integration" --format json:reports/cucumber-report.json
+        run: |
+          mkdir -p reports
+          npx cucumber-js specs --require specs/support --require specs/steps --tags "not @integration" --format json:reports/cucumber-report.json
       - name: Generate HTML report
         if: ${{ !cancelled() }}
         run: node scripts/generate-report.js
