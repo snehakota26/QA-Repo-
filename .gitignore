@@ -6,7 +6,7 @@ node_modules/
 /playwright/.cache/
 /playwright/.auth/
 /reports/
-/.auth/
+/.auth/*
 !/.auth/azure-portal-state.enc.b64
 
 # Secrets
