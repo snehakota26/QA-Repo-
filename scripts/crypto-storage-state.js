@@ -14,7 +14,10 @@ const jsonPath = path.join(__dirname, '..', '.auth', 'azure-portal-state.json');
 const encPath = path.join(__dirname, '..', '.auth', 'azure-portal-state.enc.b64');
 
 const [, , mode, passphraseArg] = process.argv;
-const passphrase = passphraseArg || process.env.AZURE_PORTAL_STATE_PASSPHRASE;
+// .trim() defends against a stray trailing newline/whitespace from clipboard
+// paste round-trips (e.g. via a GitHub secret textarea), which otherwise
+// silently changes the derived key and fails auth-tag verification on decrypt.
+const passphrase = (passphraseArg || process.env.AZURE_PORTAL_STATE_PASSPHRASE || '').trim();
 if (!['encrypt', 'decrypt'].includes(mode) || !passphrase) {
   console.error('Usage: node scripts/crypto-storage-state.js <encrypt|decrypt> [passphrase]');
   console.error('(or set the AZURE_PORTAL_STATE_PASSPHRASE env var instead of passing it as an arg)');
