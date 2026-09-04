@@ -1,0 +1,33 @@
+{
+  "name": "agenticai",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "install-browsers": "npx playwright install",
+    "test:bdd": "npx cucumber-js specs --require specs/support --require specs/steps --tags \"not @integration\"",
+    "test:integration": "npx cucumber-js specs --require specs/support --require specs/steps --tags @integration",
+    "test:integration:mcp": "npx cucumber-js specs --require specs/support --require specs/steps --tags @mcp",
+    "test:integration:pipeline": "npx cucumber-js specs --require specs/support --require specs/steps --tags \"@pipeline and not @live\"",
+    "test:integration:pipeline:live": "npx cucumber-js specs --require specs/support --require specs/steps --tags \"@pipeline and @live\"",
+    "test:integration:cope-e2e": "npx cucumber-js specs --require specs/support --require specs/steps --tags \"@cope and @live\"",
+    "test:integration:azure-portal": "npx cucumber-js specs --require specs/support --require specs/steps --tags \"@azure-portal\"",
+    "auth:azure-portal": "node scripts/capture-azure-storage-state.js",
+    "test:bdd:report": "node -e \"require('fs').mkdirSync('reports', { recursive: true })\" && npx cucumber-js specs --require specs/support --require specs/steps --format json:reports/cucumber-report.json && node scripts/generate-report.js",
+    "report": "npm run test:bdd:report"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "@types/node": "^26.2.0",
+    "@azure/identity": "^4.4.1",
+    "@azure/service-bus": "^7.9.4",
+    "@azure/storage-blob": "^12.24.0",
+    "@cucumber/cucumber": "^8.8.0",
+    "dotenv": "^16.4.5",
+    "playwright": "^1.62.1"
+  }
+}
