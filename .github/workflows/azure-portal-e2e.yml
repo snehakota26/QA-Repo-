@@ -7,9 +7,12 @@ name: Cope Pipeline E2E (Azure Portal, manual)
 #
 # Before running this workflow:
 #   1. Locally: npm run auth:azure-portal   (sign in once, captures .auth/azure-portal-state.json)
-#   2. Base64-encode it and update the AZURE_PORTAL_STORAGE_STATE_B64 secret:
-#        [Convert]::ToBase64String([IO.File]::ReadAllBytes(".auth/azure-portal-state.json")) | Set-Clipboard
-#   3. Paste it into Settings -> Secrets and variables -> Actions -> AZURE_PORTAL_STORAGE_STATE_B64
+#   2. Base64-encode it and split into <48KB chunks (GitHub's secret size limit), copying
+#      each chunk to the clipboard in turn:
+#        $b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes(".auth/azure-portal-state.json"))
+#        $b64.Substring(0,40000) | Set-Clipboard   # -> AZURE_PORTAL_STORAGE_STATE_B64_1
+#        $b64.Substring(40000) | Set-Clipboard      # -> AZURE_PORTAL_STORAGE_STATE_B64_2
+#   3. Paste each into Settings -> Secrets and variables -> Actions
 #   4. Run this workflow (Actions tab -> this workflow -> Run workflow)
 on:
   workflow_dispatch:
@@ -29,10 +32,13 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Restore Azure Portal storage state
+        env:
+          PART1: ${{ secrets.AZURE_PORTAL_STORAGE_STATE_B64_1 }}
+          PART2: ${{ secrets.AZURE_PORTAL_STORAGE_STATE_B64_2 }}
         run: |
           mkdir -p .auth
-          echo "${{ secrets.AZURE_PORTAL_STORAGE_STATE_B64 }}" | base64 -d > .auth/azure-portal-state.json
-          test -s .auth/azure-portal-state.json
+          printf '%s%s' "$PART1" "$PART2" | base64 -d > .auth/azure-portal-state.json
+          node -e "JSON.parse(require('fs').readFileSync('.auth/azure-portal-state.json','utf8'))"
 
       - name: Run Cope pipeline E2E (Azure Portal)
         env:
