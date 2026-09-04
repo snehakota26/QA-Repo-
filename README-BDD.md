@@ -89,12 +89,11 @@ Three workflows live in `.github/workflows/`:
 
 - **`bdd-tests.yml`** - runs on every push/PR to `main`. Executes all non-`@integration`
   scenarios. No external dependencies, no secrets required.
-- **`integration-tests.yml`** - manual (`workflow_dispatch`) until the `ORG_REPO_TOKEN`
-  secret is added (a PAT with read access to the private `allata-llc/mcp-server` and
-  `allata-llc/pipeline-function` repos). Checks out both repos as siblings, starts the
-  `mcp-server` Functions host, then runs `test:integration:mcp` and
-  `test:integration:pipeline` (non-live). Once the secret exists, add `push`/`pull_request`
-  triggers to run it automatically.
+- **`integration-tests.yml`** - runs on every push/PR to `main`, plus manual dispatch.
+  Requires the `ORG_REPO_TOKEN` secret (a PAT with read access to the private
+  `allata-llc/mcp-server` and `allata-llc/pipeline-function` repos). Checks out both repos
+  as siblings, starts the `mcp-server` Functions host, then runs `test:integration:mcp` and
+  `test:integration:pipeline` (non-live).
 - **`live-tests.yml`** - manual only, always. Publishes a real message to the
   `cope-requests` Service Bus queue via `test:integration:pipeline:live`. Requires the
   `SERVICE_BUS_CONNECTION` secret.

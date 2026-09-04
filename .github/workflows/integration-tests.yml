@@ -1,9 +1,12 @@
 name: Integration Tests (MCP server + pipeline-function)
 
-# Manual only until ORG_REPO_TOKEN is configured (needs read access to the
-# private allata-llc/mcp-server and allata-llc/pipeline-function repos).
-# Switch the `on:` block to also include push/pull_request once that secret exists.
+# Requires the ORG_REPO_TOKEN secret (read access to the private
+# allata-llc/mcp-server and allata-llc/pipeline-function repos).
 on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
