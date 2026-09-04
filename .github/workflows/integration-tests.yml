@@ -1,0 +1,95 @@
+name: Integration Tests (MCP server + pipeline-function)
+
+# Manual only until ORG_REPO_TOKEN is configured (needs read access to the
+# private allata-llc/mcp-server and allata-llc/pipeline-function repos).
+# Switch the `on:` block to also include push/pull_request once that secret exists.
+on:
+  workflow_dispatch:
+
+jobs:
+  integration:
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout AgenticAI
+        uses: actions/checkout@v4
+        with:
+          path: agenticai
+
+      - name: Checkout mcp-server
+        uses: actions/checkout@v4
+        with:
+          repository: allata-llc/mcp-server
+          ref: develop
+          token: ${{ secrets.ORG_REPO_TOKEN }}
+          path: mcp-server
+
+      - name: Checkout pipeline-function
+        uses: actions/checkout@v4
+        with:
+          repository: allata-llc/pipeline-function
+          ref: develop
+          token: ${{ secrets.ORG_REPO_TOKEN }}
+          path: pipeline-function
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Azure Functions Core Tools
+        run: npm install -g azure-functions-core-tools@4 --unsafe-perm true
+
+      - name: Install AgenticAI dependencies
+        working-directory: agenticai
+        run: npm ci
+
+      - name: Install mcp-server Python dependencies
+        working-directory: mcp-server
+        run: pip install -r requirements.txt
+
+      - name: Write mcp-server local.settings.json
+        working-directory: mcp-server
+        run: |
+          cat > local.settings.json << 'EOF'
+          {
+            "IsEncrypted": false,
+            "Values": {
+              "FUNCTIONS_WORKER_RUNTIME": "python"
+            }
+          }
+          EOF
+
+      - name: Start mcp-server Functions host
+        working-directory: mcp-server
+        run: |
+          nohup func start > func.log 2>&1 &
+          echo "Waiting for mcp-server host on :7071..."
+          for i in $(seq 1 30); do
+            if curl -s -o /dev/null http://127.0.0.1:7071/; then
+              echo "mcp-server is up"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "mcp-server did not start in time"
+          cat func.log
+          exit 1
+
+      - name: Run MCP server integration tests
+        working-directory: agenticai
+        run: npm run test:integration:mcp
+
+      - name: Run pipeline-function integration tests (non-live)
+        working-directory: agenticai
+        env:
+          PIPELINE_FUNCTION_REPO: ../pipeline-function
+        run: npm run test:integration:pipeline
+
+      - name: Show mcp-server logs
+        if: ${{ !cancelled() }}
+        working-directory: mcp-server
+        run: cat func.log || true

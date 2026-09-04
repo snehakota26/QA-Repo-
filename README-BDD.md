@@ -82,3 +82,26 @@ Notes
 - Feature files live in `specs/`.
 - Cucumber World is `specs/support/world.js` which wires Playwright and page objects.
 - Step definitions are in `specs/steps/`; integration steps are isolated in `integration.steps.js`.
+
+## CI/CD (GitHub Actions)
+
+Three workflows live in `.github/workflows/`:
+
+- **`bdd-tests.yml`** - runs on every push/PR to `main`. Executes all non-`@integration`
+  scenarios. No external dependencies, no secrets required.
+- **`integration-tests.yml`** - manual (`workflow_dispatch`) until the `ORG_REPO_TOKEN`
+  secret is added (a PAT with read access to the private `allata-llc/mcp-server` and
+  `allata-llc/pipeline-function` repos). Checks out both repos as siblings, starts the
+  `mcp-server` Functions host, then runs `test:integration:mcp` and
+  `test:integration:pipeline` (non-live). Once the secret exists, add `push`/`pull_request`
+  triggers to run it automatically.
+- **`live-tests.yml`** - manual only, always. Publishes a real message to the
+  `cope-requests` Service Bus queue via `test:integration:pipeline:live`. Requires the
+  `SERVICE_BUS_CONNECTION` secret.
+
+Not automated in any workflow:
+- `test:integration:azure-portal` and `test:integration:cope-e2e` - both drive the real
+  Azure Portal UI and are tagged `@manual-auth`. They depend on a storage-state file
+  captured interactively (`npm run auth:azure-portal`) that expires within hours, so they
+  can only be run locally by a signed-in operator.
+

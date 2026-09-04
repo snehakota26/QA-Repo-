@@ -1,0 +1,23 @@
+name: Live Pipeline Test (manual, hits real Service Bus)
+
+# Publishes a real message to the "cope-requests" Service Bus queue.
+# Manual-only - never runs automatically. Requires SERVICE_BUS_CONNECTION secret.
+on:
+  workflow_dispatch:
+
+jobs:
+  live-pipeline:
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+      - name: Install dependencies
+        run: npm ci
+      - name: Publish live property request to Service Bus
+        env:
+          SERVICE_BUS_CONNECTION: ${{ secrets.SERVICE_BUS_CONNECTION }}
+          PIPELINE_QUEUE_NAME: cope-requests
+        run: npm run test:integration:pipeline:live
