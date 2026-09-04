@@ -5,14 +5,13 @@ name: Cope Pipeline E2E (Azure Portal, manual)
 # reuses a pre-authenticated Playwright storage state captured locally via
 # `npm run auth:azure-portal`, which expires within a few hours.
 #
-# Before running this workflow:
+# Before running this workflow (only needed once per re-captured session):
 #   1. Locally: npm run auth:azure-portal   (sign in once, captures .auth/azure-portal-state.json)
-#   2. Base64-encode it and split into <48KB chunks (GitHub's secret size limit), copying
-#      each chunk to the clipboard in turn:
-#        $b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes(".auth/azure-portal-state.json"))
-#        $b64.Substring(0,40000) | Set-Clipboard   # -> AZURE_PORTAL_STORAGE_STATE_B64_1
-#        $b64.Substring(40000) | Set-Clipboard      # -> AZURE_PORTAL_STORAGE_STATE_B64_2
-#   3. Paste each into Settings -> Secrets and variables -> Actions
+#   2. Encrypt it and commit the encrypted blob (never the raw session file):
+#        node scripts/crypto-storage-state.js encrypt <a-passphrase>
+#        git add .auth/azure-portal-state.enc.b64 && git commit -m "Refresh Azure Portal session" && git push
+#   3. The first time only: add the AZURE_PORTAL_STATE_PASSPHRASE secret with that passphrase
+#      (short string, no size limit issues - reuse the same passphrase on future refreshes)
 #   4. Run this workflow (Actions tab -> this workflow -> Run workflow)
 on:
   workflow_dispatch:
@@ -33,12 +32,8 @@ jobs:
 
       - name: Restore Azure Portal storage state
         env:
-          PART1: ${{ secrets.AZURE_PORTAL_STORAGE_STATE_B64_1 }}
-          PART2: ${{ secrets.AZURE_PORTAL_STORAGE_STATE_B64_2 }}
-        run: |
-          mkdir -p .auth
-          printf '%s%s' "$PART1" "$PART2" | base64 -d > .auth/azure-portal-state.json
-          node -e "JSON.parse(require('fs').readFileSync('.auth/azure-portal-state.json','utf8'))"
+          AZURE_PORTAL_STATE_PASSPHRASE: ${{ secrets.AZURE_PORTAL_STATE_PASSPHRASE }}
+        run: node scripts/crypto-storage-state.js decrypt "$AZURE_PORTAL_STATE_PASSPHRASE"
 
       - name: Run Cope pipeline E2E (Azure Portal)
         env:
