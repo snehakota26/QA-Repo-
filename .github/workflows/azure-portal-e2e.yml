@@ -1,0 +1,48 @@
+name: Cope Pipeline E2E (Azure Portal, manual)
+
+# Runs the real Azure Portal UI scenario (cope-pipeline-e2e.feature) headless.
+# Can't run on every push: Azure AD sign-in needs MFA and can't be scripted, so this
+# reuses a pre-authenticated Playwright storage state captured locally via
+# `npm run auth:azure-portal`, which expires within a few hours.
+#
+# Before running this workflow:
+#   1. Locally: npm run auth:azure-portal   (sign in once, captures .auth/azure-portal-state.json)
+#   2. Base64-encode it and update the AZURE_PORTAL_STORAGE_STATE_B64 secret:
+#        [Convert]::ToBase64String([IO.File]::ReadAllBytes(".auth/azure-portal-state.json")) | Set-Clipboard
+#   3. Paste it into Settings -> Secrets and variables -> Actions -> AZURE_PORTAL_STORAGE_STATE_B64
+#   4. Run this workflow (Actions tab -> this workflow -> Run workflow)
+on:
+  workflow_dispatch:
+
+jobs:
+  azure-portal-e2e:
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+      - name: Install dependencies
+        run: npm ci
+      - name: Install Playwright Browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Restore Azure Portal storage state
+        run: |
+          mkdir -p .auth
+          echo "${{ secrets.AZURE_PORTAL_STORAGE_STATE_B64 }}" | base64 -d > .auth/azure-portal-state.json
+          test -s .auth/azure-portal-state.json
+
+      - name: Run Cope pipeline E2E (Azure Portal)
+        env:
+          AZURE_PORTAL_STORAGE_STATE: ${{ github.workspace }}/.auth/azure-portal-state.json
+          AZURE_PORTAL_HEADLESS: 'true'
+        run: npm run test:integration:azure-portal
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: cope-e2e-test-results
+          path: test-results/
+          retention-days: 14

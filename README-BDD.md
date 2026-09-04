@@ -99,8 +99,14 @@ Three workflows live in `.github/workflows/`:
   `SERVICE_BUS_CONNECTION` secret.
 
 Not automated in any workflow:
-- `test:integration:azure-portal` and `test:integration:cope-e2e` - both drive the real
-  Azure Portal UI and are tagged `@manual-auth`. They depend on a storage-state file
-  captured interactively (`npm run auth:azure-portal`) that expires within hours, so they
-  can only be run locally by a signed-in operator.
+- `test:integration:cope-e2e` - the full end-to-end scenario (Service Bus -> Foundry -> Blob),
+  which is only exercised via the Azure Portal UI scenario below.
+
+Runs on `workflow_dispatch` only, using a secret instead of pure local execution:
+- **`azure-portal-e2e.yml`** - runs `test:integration:azure-portal` (the `@azure-portal`
+  scenario in `cope-pipeline-e2e.feature`) headless in CI. Azure AD sign-in needs MFA and
+  can't be scripted, so it reuses a Playwright storage state captured locally
+  (`npm run auth:azure-portal`), base64-encoded into the `AZURE_PORTAL_STORAGE_STATE_B64`
+  secret. That session expires within hours, so re-capture and re-upload the secret before
+  each run - it is not scheduled or triggered on push.
 
