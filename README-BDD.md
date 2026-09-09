@@ -106,7 +106,9 @@ Runs on `workflow_dispatch` only, using a secret instead of pure local execution
 - **`azure-portal-e2e.yml`** - runs `test:integration:azure-portal` (the `@azure-portal`
   scenario in `cope-pipeline-e2e.feature`) headless in CI. Azure AD sign-in needs MFA and
   can't be scripted, so it reuses a Playwright storage state captured locally
-  (`npm run auth:azure-portal`), base64-encoded into the `AZURE_PORTAL_STORAGE_STATE_B64`
-  secret. That session expires within hours, so re-capture and re-upload the secret before
-  each run - it is not scheduled or triggered on push.
-
+  (`npm run auth:azure-portal`) and committed as `.auth/azure-portal-state.enc.b64`, then
+  decrypted in CI with the `AZURE_PORTAL_STATE_PASSPHRASE` secret. The workflow also sets
+  default values for `SERVICE_BUS_NAMESPACE_FQDN` and `STORAGE_ACCOUNT_URL` (and allows
+  overriding them with repository variables of the same names). The session expires within
+  hours, so re-capture and re-encrypt the state before each run - it is not scheduled or
+  triggered on push.
