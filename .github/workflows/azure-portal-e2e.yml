@@ -40,13 +40,13 @@ jobs:
           AZURE_PORTAL_STORAGE_STATE: ${{ github.workspace }}/.auth/azure-portal-state.json
           AZURE_PORTAL_HEADLESS: 'true'
           # Non-secret resource hostnames (already public in cope-pipeline-e2e.feature's text)
-          SERVICE_BUS_NAMESPACE_FQDN: cope-pocsb.servicebus.windows.net
-          STORAGE_ACCOUNT_URL: https://copepocsa.blob.core.windows.net
-          COPE_QUEUE_NAME: cope-requests
+          SERVICE_BUS_NAMESPACE_FQDN: ${{ vars.SERVICE_BUS_NAMESPACE_FQDN || 'cope-pocsb.servicebus.windows.net' }}
+          STORAGE_ACCOUNT_URL: ${{ vars.STORAGE_ACCOUNT_URL || 'https://copepocsa.blob.core.windows.net' }}
+          COPE_QUEUE_NAME: ${{ vars.COPE_QUEUE_NAME || 'cope-requests' }}
           # Picked up automatically by @azure/identity's DefaultAzureCredential (EnvironmentCredential)
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID || vars.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET || vars.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID || vars.AZURE_TENANT_ID }}
         run: npm run test:integration:azure-portal
 
       - uses: actions/upload-artifact@v4
