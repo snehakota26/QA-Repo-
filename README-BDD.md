@@ -109,6 +109,8 @@ Runs on `workflow_dispatch` only, using a secret instead of pure local execution
   (`npm run auth:azure-portal`) and committed as `.auth/azure-portal-state.enc.b64`, then
   decrypted in CI with the `AZURE_PORTAL_STATE_PASSPHRASE` secret. The workflow also sets
   default values for `SERVICE_BUS_NAMESPACE_FQDN` and `STORAGE_ACCOUNT_URL` (and allows
-  overriding them with repository variables of the same names). The session expires within
+  overriding them with repository variables of the same names). For Azure SDK auth, it
+  accepts either split `AZURE_CLIENT_ID` / `AZURE_CLIENT_SECRET` / `AZURE_TENANT_ID`
+  secrets/vars or the standard `AZURE_CREDENTIALS` JSON secret. The session expires within
   hours, so re-capture and re-encrypt the state before each run - it is not scheduled or
   triggered on push.

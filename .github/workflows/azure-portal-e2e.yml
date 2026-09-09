@@ -35,6 +35,51 @@ jobs:
           AZURE_PORTAL_STATE_PASSPHRASE: ${{ secrets.AZURE_PORTAL_STATE_PASSPHRASE }}
         run: node scripts/crypto-storage-state.js decrypt "$AZURE_PORTAL_STATE_PASSPHRASE"
 
+      - name: Resolve Azure SDK credentials
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID || vars.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET || vars.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID || vars.AZURE_TENANT_ID }}
+          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+        run: |
+          node - <<'NODE'
+          const fs = require('node:fs');
+
+          const parseCredentials = () => {
+            if (!process.env.AZURE_CREDENTIALS) return {};
+            try {
+              return JSON.parse(process.env.AZURE_CREDENTIALS);
+            } catch (error) {
+              console.error('AZURE_CREDENTIALS is not valid JSON.');
+              throw error;
+            }
+          };
+
+          const credentials = parseCredentials();
+          const resolved = {
+            AZURE_CLIENT_ID: (process.env.AZURE_CLIENT_ID || credentials.clientId || '').trim(),
+            AZURE_CLIENT_SECRET: (process.env.AZURE_CLIENT_SECRET || credentials.clientSecret || '').trim(),
+            AZURE_TENANT_ID: (process.env.AZURE_TENANT_ID || credentials.tenantId || '').trim()
+          };
+
+          const missing = Object.entries(resolved)
+            .filter(([, value]) => !value)
+            .map(([name]) => name);
+
+          if (missing.length) {
+            console.error(
+              `Missing Azure SDK credentials: ${missing.join(', ')}. ` +
+              'Set AZURE_CLIENT_ID/AZURE_CLIENT_SECRET/AZURE_TENANT_ID as repo secrets or vars, ' +
+              'or provide the standard AZURE_CREDENTIALS JSON secret.'
+            );
+            process.exit(1);
+          }
+
+          for (const [name, value] of Object.entries(resolved)) {
+            fs.appendFileSync(process.env.GITHUB_ENV, `${name}=${value}\n`);
+          }
+          NODE
+
       - name: Run Cope pipeline E2E (Azure Portal)
         env:
           AZURE_PORTAL_STORAGE_STATE: ${{ github.workspace }}/.auth/azure-portal-state.json
@@ -43,10 +88,6 @@ jobs:
           SERVICE_BUS_NAMESPACE_FQDN: ${{ vars.SERVICE_BUS_NAMESPACE_FQDN || 'cope-pocsb.servicebus.windows.net' }}
           STORAGE_ACCOUNT_URL: ${{ vars.STORAGE_ACCOUNT_URL || 'https://copepocsa.blob.core.windows.net' }}
           COPE_QUEUE_NAME: ${{ vars.COPE_QUEUE_NAME || 'cope-requests' }}
-          # Picked up automatically by @azure/identity's DefaultAzureCredential (EnvironmentCredential)
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID || vars.AZURE_CLIENT_ID }}
-          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET || vars.AZURE_CLIENT_SECRET }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID || vars.AZURE_TENANT_ID }}
         run: npm run test:integration:azure-portal
 
       - uses: actions/upload-artifact@v4
