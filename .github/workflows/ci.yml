@@ -1,0 +1,232 @@
+name: CI
+
+# Single consolidated pipeline for all 3 feature files (replaces the previous
+# bdd-tests.yml, integration-tests.yml, azure-portal-e2e.yml, live-tests.yml,
+# playwright.yml). copilot-setup-steps.yml stays separate - it's the special
+# file GitHub's Copilot coding agent uses to prep its own sandbox, not a test job.
+#
+# "bdd" and "integration" run automatically on every push/PR to main.
+# "azure-portal-e2e" and "live-pipeline" only run when explicitly requested via
+# workflow_dispatch inputs (they need manual/live setup - see their job comments).
+#
+# Environment-specific config (Service Bus namespace, storage account, queue
+# names, sibling-repo ref, Azure credentials) is read from a GitHub Environment
+# (Settings > Environments) via the "environment" input, so the same jobs can
+# target dev/stage/prod later just by adding environments with the same
+# variable/secret names and different values. Only "dev" needs to exist today.
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment (source of vars/secrets)'
+        type: choice
+        options: [ dev, stage, prod ]
+        default: dev
+      run_azure_portal_e2e:
+        description: 'Also run Cope Pipeline E2E (Azure Portal) - needs a fresh storage state'
+        type: boolean
+        default: false
+      run_live_pipeline:
+        description: 'Also run Live Pipeline Test - publishes a real Service Bus message'
+        type: boolean
+        default: false
+
+jobs:
+  bdd:
+    name: BDD Tests (Cucumber)
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment || 'dev' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+      - name: Install dependencies
+        run: npm ci
+      - name: Install Playwright Browsers
+        run: npx playwright install --with-deps
+      # Non-@integration scenarios only - no live Azure/MCP dependencies required
+      - name: Run BDD scenarios
+        run: |
+          mkdir -p reports
+          npx cucumber-js specs --require specs/support --require specs/steps --tags "not @integration" --format json:reports/cucumber-report.json
+      - name: Generate HTML report
+        if: ${{ !cancelled() }}
+        run: node scripts/generate-report.js
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: cucumber-bdd-report
+          path: reports/
+          retention-days: 30
+
+  integration:
+    name: Integration Tests (MCP server + pipeline-function)
+    # Requires the ORG_REPO_TOKEN secret (read access to the private
+    # allata-llc/mcp-server and allata-llc/pipeline-function repos).
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment || 'dev' }}
+    steps:
+      - name: Checkout AgenticAI
+        uses: actions/checkout@v4
+        with:
+          path: agenticai
+
+      - name: Checkout mcp-server
+        uses: actions/checkout@v4
+        with:
+          repository: allata-llc/mcp-server
+          ref: ${{ vars.SIBLING_REPO_REF || 'develop' }}
+          token: ${{ secrets.ORG_REPO_TOKEN }}
+          path: mcp-server
+
+      - name: Checkout pipeline-function
+        uses: actions/checkout@v4
+        with:
+          repository: allata-llc/pipeline-function
+          ref: ${{ vars.SIBLING_REPO_REF || 'develop' }}
+          token: ${{ secrets.ORG_REPO_TOKEN }}
+          path: pipeline-function
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Azure Functions Core Tools
+        run: npm install -g azure-functions-core-tools@4 --unsafe-perm true
+
+      - name: Install AgenticAI dependencies
+        working-directory: agenticai
+        run: npm ci
+
+      - name: Install mcp-server Python dependencies
+        working-directory: mcp-server
+        run: pip install -r requirements.txt
+
+      - name: Write mcp-server local.settings.json
+        working-directory: mcp-server
+        run: |
+          cat > local.settings.json << 'EOF'
+          {
+            "IsEncrypted": false,
+            "Values": {
+              "FUNCTIONS_WORKER_RUNTIME": "python"
+            }
+          }
+          EOF
+
+      - name: Start mcp-server Functions host
+        working-directory: mcp-server
+        run: |
+          nohup func start > func.log 2>&1 &
+          echo "Waiting for mcp-server host on :7071..."
+          for i in $(seq 1 30); do
+            if curl -s -o /dev/null http://127.0.0.1:7071/; then
+              echo "mcp-server is up"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "mcp-server did not start in time"
+          cat func.log
+          exit 1
+
+      - name: Run MCP server integration tests
+        working-directory: agenticai
+        run: npm run test:integration:mcp
+
+      - name: Run pipeline-function integration tests (non-live)
+        working-directory: agenticai
+        env:
+          PIPELINE_FUNCTION_REPO: ../pipeline-function
+        run: npm run test:integration:pipeline
+
+      - name: Show mcp-server logs
+        if: ${{ !cancelled() }}
+        working-directory: mcp-server
+        run: cat func.log || true
+
+  azure-portal-e2e:
+    name: Cope Pipeline E2E (Azure Portal, manual)
+    # Runs the real Azure Portal UI scenario (cope-pipeline-e2e.feature) headless.
+    # Can't run on every push: Azure AD sign-in needs MFA and can't be scripted, so this
+    # reuses a pre-authenticated Playwright storage state captured locally via
+    # `npm run auth:azure-portal`, which expires within a few hours.
+    #
+    # Before running (only needed once per re-captured session):
+    #   1. Locally: npm run auth:azure-portal   (sign in once, captures .auth/azure-portal-state.json)
+    #   2. Encrypt it and commit the encrypted blob (never the raw session file):
+    #        node scripts/crypto-storage-state.js encrypt <a-passphrase>
+    #        git add .auth/azure-portal-state.enc.b64 && git commit -m "Refresh Azure Portal session" && git push
+    #   3. The first time only: add the AZURE_PORTAL_STATE_PASSPHRASE secret with that passphrase
+    #   4. Run this workflow with "run_azure_portal_e2e" checked (Actions tab -> CI -> Run workflow)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_azure_portal_e2e }}
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment || 'dev' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+      - name: Install dependencies
+        run: npm ci
+      - name: Install Playwright Browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Restore Azure Portal storage state
+        env:
+          AZURE_PORTAL_STATE_PASSPHRASE: ${{ secrets.AZURE_PORTAL_STATE_PASSPHRASE }}
+        run: node scripts/crypto-storage-state.js decrypt "$AZURE_PORTAL_STATE_PASSPHRASE"
+
+      - name: Run Cope pipeline E2E (Azure Portal)
+        env:
+          AZURE_PORTAL_STORAGE_STATE: ${{ github.workspace }}/.auth/azure-portal-state.json
+          AZURE_PORTAL_HEADLESS: 'true'
+          # Environment-specific resource names (Settings > Environments > Variables)
+          SERVICE_BUS_NAMESPACE_FQDN: ${{ vars.SERVICE_BUS_NAMESPACE_FQDN || 'cope-pocsb.servicebus.windows.net' }}
+          STORAGE_ACCOUNT_URL: ${{ vars.STORAGE_ACCOUNT_URL || 'https://copepocsa.blob.core.windows.net' }}
+          COPE_QUEUE_NAME: ${{ vars.COPE_QUEUE_NAME || 'cope-requests' }}
+          # Picked up automatically by @azure/identity's DefaultAzureCredential (EnvironmentCredential)
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        run: npm run test:integration:azure-portal
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: cope-e2e-test-results
+          path: test-results/
+          retention-days: 14
+
+  live-pipeline:
+    name: Live Pipeline Test (manual, hits real Service Bus)
+    # Publishes a real message to the Service Bus queue. Manual-only - never runs
+    # automatically. Requires SERVICE_BUS_CONNECTION secret.
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_live_pipeline }}
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment || 'dev' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+      - name: Install dependencies
+        run: npm ci
+      - name: Publish live property request to Service Bus
+        env:
+          SERVICE_BUS_CONNECTION: ${{ secrets.SERVICE_BUS_CONNECTION }}
+          PIPELINE_QUEUE_NAME: ${{ vars.COPE_QUEUE_NAME || 'cope-requests' }}
+        run: npm run test:integration:pipeline:live
