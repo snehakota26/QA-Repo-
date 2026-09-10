@@ -13,7 +13,9 @@ name: CI
 # names, sibling-repo ref, Azure credentials) is read from a GitHub Environment
 # (Settings > Environments) via the "environment" input, so the same jobs can
 # target dev/stage/prod later just by adding environments with the same
-# variable/secret names and different values. Only "dev" needs to exist today.
+# variable/secret names and different values. Only "dev" exists today - add
+# "stage"/"prod" GitHub Environments when those are ready, no workflow changes needed.
+run-name: "CI (${{ inputs.environment || 'dev' }} environment)"
 on:
   push:
     branches: [ main ]
@@ -37,7 +39,7 @@ on:
 
 jobs:
   bdd:
-    name: BDD Tests (Cucumber)
+    name: "BDD Tests (Cucumber) [${{ inputs.environment || 'dev' }}]"
     timeout-minutes: 30
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment || 'dev' }}
@@ -66,7 +68,7 @@ jobs:
           retention-days: 30
 
   integration:
-    name: Integration Tests (MCP server + pipeline-function)
+    name: "Integration Tests (MCP server + pipeline-function) [${{ inputs.environment || 'dev' }}]"
     # Requires the ORG_REPO_TOKEN secret (read access to the private
     # allata-llc/mcp-server and allata-llc/pipeline-function repos).
     timeout-minutes: 20
@@ -157,7 +159,7 @@ jobs:
         run: cat func.log || true
 
   azure-portal-e2e:
-    name: Cope Pipeline E2E (Azure Portal, manual)
+    name: "Cope Pipeline E2E (Azure Portal, manual) [${{ inputs.environment || 'dev' }}]"
     # Runs the real Azure Portal UI scenario (cope-pipeline-e2e.feature) headless.
     # Can't run on every push: Azure AD sign-in needs MFA and can't be scripted, so this
     # reuses a pre-authenticated Playwright storage state captured locally via
@@ -253,7 +255,7 @@ jobs:
           retention-days: 14
 
   live-pipeline:
-    name: Live Pipeline Test (manual, hits real Service Bus)
+    name: "Live Pipeline Test (manual, hits real Service Bus) [${{ inputs.environment || 'dev' }}]"
     # Publishes a real message to the Service Bus queue. Manual-only - never runs
     # automatically. Requires SERVICE_BUS_CONNECTION secret.
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_live_pipeline }}
