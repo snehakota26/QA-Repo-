@@ -85,28 +85,37 @@ Notes
 
 ## CI/CD (GitHub Actions)
 
-Three workflows live in `.github/workflows/`:
+A single workflow, **`.github/workflows/ci.yml`**, runs all jobs (`copilot-setup-steps.yml`
+is separate - it's the file GitHub's Copilot coding agent uses to prep its own sandbox, not
+a test job):
 
-- **`bdd-tests.yml`** - runs on every push/PR to `main`. Executes all non-`@integration`
-  scenarios. No external dependencies, no secrets required.
-- **`integration-tests.yml`** - runs on every push/PR to `main`, plus manual dispatch.
-  Requires the `ORG_REPO_TOKEN` secret (a PAT with read access to the private
-  `allata-llc/mcp-server` and `allata-llc/pipeline-function` repos). Checks out both repos
-  as siblings, starts the `mcp-server` Functions host, then runs `test:integration:mcp` and
+- **`bdd`** - runs on every push/PR to `main`. Executes all non-`@integration` scenarios. No
+  external dependencies, no secrets required.
+- **`integration`** - runs on every push/PR to `main`. Requires the `ORG_REPO_TOKEN` secret
+  (a PAT with read access to the private `allata-llc/mcp-server` and
+  `allata-llc/pipeline-function` repos). Checks out both repos as siblings, starts the
+  `mcp-server` Functions host, then runs `test:integration:mcp` and
   `test:integration:pipeline` (non-live).
-- **`live-tests.yml`** - manual only, always. Publishes a real message to the
-  `cope-requests` Service Bus queue via `test:integration:pipeline:live`. Requires the
-  `SERVICE_BUS_CONNECTION` secret.
+- **`azure-portal-e2e`** - manual only, via `workflow_dispatch` with the
+  `run_azure_portal_e2e` input checked. Runs `test:integration:azure-portal` (the
+  `@azure-portal` scenario in `cope-pipeline-e2e.feature`) headless in CI. Azure AD sign-in
+  needs MFA and can't be scripted, so it reuses a Playwright storage state captured locally
+  (`npm run auth:azure-portal`) and committed as `.auth/azure-portal-state.enc.b64`, then
+  decrypted in CI with the `AZURE_PORTAL_STATE_PASSPHRASE` secret. The workflow also sets
+  default values for `SERVICE_BUS_NAMESPACE_FQDN` and `STORAGE_ACCOUNT_URL` (and allows
+  overriding them with repository variables of the same names). For Azure SDK auth, it
+  accepts either split `AZURE_CLIENT_ID` / `AZURE_CLIENT_SECRET` / `AZURE_TENANT_ID`
+  secrets/vars or the standard `AZURE_CREDENTIALS` JSON secret. The session expires within
+  hours, so re-capture and re-encrypt the state before each run.
+- **`live-pipeline`** - manual only, via `workflow_dispatch` with the `run_live_pipeline`
+  input checked. Publishes a real message to the `cope-requests` Service Bus queue via
+  `test:integration:pipeline:live`. Requires the `SERVICE_BUS_CONNECTION` secret.
 
-Not automated in any workflow:
+All jobs read a `environment` input (`dev`/`stage`/`prod`, default `dev`) so
+environment-specific variables/secrets can be configured per GitHub Environment (Settings >
+Environments) without editing the workflow.
+
+Not automated in any job:
 - `test:integration:cope-e2e` - the full end-to-end scenario (Service Bus -> Foundry -> Blob),
-  which is only exercised via the Azure Portal UI scenario below.
-
-Runs on `workflow_dispatch` only, using a secret instead of pure local execution:
-- **`azure-portal-e2e.yml`** - runs `test:integration:azure-portal` (the `@azure-portal`
-  scenario in `cope-pipeline-e2e.feature`) headless in CI. Azure AD sign-in needs MFA and
-  can't be scripted, so it reuses a Playwright storage state captured locally
-  (`npm run auth:azure-portal`), base64-encoded into the `AZURE_PORTAL_STORAGE_STATE_B64`
-  secret. That session expires within hours, so re-capture and re-upload the secret before
-  each run - it is not scheduled or triggered on push.
+  which is only exercised via the Azure Portal UI scenario above.
 
