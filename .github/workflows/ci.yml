@@ -320,6 +320,6 @@ jobs:
       - name: Publish live property request to Service Bus
         env:
           SERVICE_BUS_CONNECTION: ${{ secrets.SERVICE_BUS_CONNECTION }}
-          SERVICE_BUS_NAMESPACE_FQDN: ${{ vars.SERVICE_BUS_NAMESPACE_FQDN || 'cope-pocsb.servicebus.windows.net' }}
+          SERVICE_BUS_NAMESPACE_FQDN: ${{ vars.SERVICE_BUS_NAMESPACE_FQDN }}
           PIPELINE_QUEUE_NAME: ${{ vars.COPE_QUEUE_NAME || 'cope-requests' }}
         run: npm run test:integration:pipeline:live
