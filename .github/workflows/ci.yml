@@ -200,6 +200,7 @@ jobs:
           AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
         run: |
           node - <<'NODE'
+          const crypto = require('node:crypto');
           const fs = require('node:fs');
 
           const parseCredentials = () => {
@@ -236,7 +237,8 @@ jobs:
             if (name !== 'SERVICE_BUS_NAMESPACE_FQDN') {
               process.stdout.write(`::add-mask::${value}\n`);
             }
-            fs.appendFileSync(process.env.GITHUB_ENV, `${name}=${value}\n`);
+            const delimiter = `COPILOT_ENV_${crypto.randomUUID()}`;
+            fs.appendFileSync(process.env.GITHUB_ENV, `${name}<<${delimiter}\n${value}\n${delimiter}\n`);
           }
           NODE
 
@@ -283,6 +285,7 @@ jobs:
           AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
         run: |
           node - <<'NODE'
+          const crypto = require('node:crypto');
           const fs = require('node:fs');
 
           const parseCredentials = () => {
@@ -322,7 +325,8 @@ jobs:
             if (name !== 'SERVICE_BUS_NAMESPACE_FQDN') {
               process.stdout.write(`::add-mask::${value}\n`);
             }
-            fs.appendFileSync(process.env.GITHUB_ENV, `${name}=${value}\n`);
+            const delimiter = `COPILOT_ENV_${crypto.randomUUID()}`;
+            fs.appendFileSync(process.env.GITHUB_ENV, `${name}<<${delimiter}\n${value}\n${delimiter}\n`);
           }
           NODE
       - name: Publish live property request to Service Bus
