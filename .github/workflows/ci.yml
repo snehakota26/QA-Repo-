@@ -273,6 +273,7 @@ jobs:
       - name: Resolve Azure SDK credentials
         env:
           SERVICE_BUS_CONNECTION: ${{ secrets.SERVICE_BUS_CONNECTION }}
+          SERVICE_BUS_NAMESPACE_FQDN: ${{ secrets.SERVICE_BUS_NAMESPACE_FQDN || vars.SERVICE_BUS_NAMESPACE_FQDN }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID || vars.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET || vars.AZURE_CLIENT_SECRET }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID || vars.AZURE_TENANT_ID }}
@@ -296,6 +297,7 @@ jobs:
 
           const credentials = parseCredentials();
           const resolved = {
+            SERVICE_BUS_NAMESPACE_FQDN: (process.env.SERVICE_BUS_NAMESPACE_FQDN || '').trim(),
             AZURE_CLIENT_ID: (process.env.AZURE_CLIENT_ID || credentials.clientId || '').trim(),
             AZURE_CLIENT_SECRET: (process.env.AZURE_CLIENT_SECRET || credentials.clientSecret || '').trim(),
             AZURE_TENANT_ID: (process.env.AZURE_TENANT_ID || credentials.tenantId || '').trim()
