@@ -233,6 +233,9 @@ jobs:
           }
 
           for (const [name, value] of Object.entries(resolved)) {
+            if (name !== 'SERVICE_BUS_NAMESPACE_FQDN') {
+              process.stdout.write(`::add-mask::${value}\n`);
+            }
             fs.appendFileSync(process.env.GITHUB_ENV, `${name}=${value}\n`);
           }
           NODE
