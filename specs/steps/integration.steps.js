@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { Given, When, Then } = require('@cucumber/cucumber');
-const { ServiceBusClient } = require('@azure/service-bus');
+const { connectPipelineServiceBus } = require('../support/pipeline-service-bus');
 
 const mcpUrl = () => process.env.MCP_SERVER_URL || 'http://127.0.0.1:7071/mcp';
 const pipelineRepo = () => process.env.PIPELINE_FUNCTION_REPO || path.resolve('..', 'pipeline-function');
@@ -108,12 +108,9 @@ Then('the pipeline queue is configured as {string}', function (queueName) {
 });
 
 Given('the pipeline Service Bus integration is configured', function () {
-  const connection = process.env.SERVICE_BUS_CONNECTION;
-  assert.ok(connection, 'Set SERVICE_BUS_CONNECTION to run pipeline integration scenarios');
-  this.serviceBusClient = new ServiceBusClient(connection);
-  this.serviceBusSender = this.serviceBusClient.createSender(
-    process.env.PIPELINE_QUEUE_NAME || 'cope-requests'
-  );
+  const { client, sender } = connectPipelineServiceBus();
+  this.serviceBusClient = client;
+  this.serviceBusSender = sender;
 });
 
 When('I publish a valid property request to the pipeline queue', async function () {
