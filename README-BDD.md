@@ -114,7 +114,7 @@ a test job):
   hours, so re-capture and re-encrypt the state before each run.
 - **`live-pipeline`** - manual only, via `workflow_dispatch` with the `run_live_pipeline`
   input checked. Publishes a real message to the `cope-requests` Service Bus queue via
-  `test:integration:pipeline:live`. Accepts either the `SERVICE_BUS_CONNECTION` secret or
+  `test:integration:pipeline:live`. Accepts either the `SERVICE_BUS_CONNECTION` secret/variable or
   the same Azure SDK credentials used by `azure-portal-e2e` plus a
   `SERVICE_BUS_NAMESPACE_FQDN` secret/variable in the selected GitHub Environment.
 

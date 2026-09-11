@@ -277,7 +277,7 @@ jobs:
         run: npm ci
       - name: Resolve Azure SDK credentials
         env:
-          SERVICE_BUS_CONNECTION: ${{ secrets.SERVICE_BUS_CONNECTION }}
+          SERVICE_BUS_CONNECTION: ${{ secrets.SERVICE_BUS_CONNECTION || vars.SERVICE_BUS_CONNECTION }}
           SERVICE_BUS_NAMESPACE_FQDN: ${{ secrets.SERVICE_BUS_NAMESPACE_FQDN || vars.SERVICE_BUS_NAMESPACE_FQDN }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID || vars.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET || vars.AZURE_CLIENT_SECRET }}
@@ -331,7 +331,7 @@ jobs:
           NODE
       - name: Publish live property request to Service Bus
         env:
-          SERVICE_BUS_CONNECTION: ${{ secrets.SERVICE_BUS_CONNECTION }}
+          SERVICE_BUS_CONNECTION: ${{ secrets.SERVICE_BUS_CONNECTION || vars.SERVICE_BUS_CONNECTION }}
           SERVICE_BUS_NAMESPACE_FQDN: ${{ secrets.SERVICE_BUS_NAMESPACE_FQDN || vars.SERVICE_BUS_NAMESPACE_FQDN }}
           PIPELINE_QUEUE_NAME: ${{ vars.COPE_QUEUE_NAME || 'cope-requests' }}
         run: npm run test:integration:pipeline:live
