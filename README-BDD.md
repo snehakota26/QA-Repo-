@@ -116,7 +116,7 @@ a test job):
   input checked. Publishes a real message to the `cope-requests` Service Bus queue via
   `test:integration:pipeline:live`. Accepts either the `SERVICE_BUS_CONNECTION` secret or
   the same Azure SDK credentials used by `azure-portal-e2e` plus a
-  `SERVICE_BUS_NAMESPACE_FQDN` environment variable in the selected GitHub Environment.
+  `SERVICE_BUS_NAMESPACE_FQDN` secret/variable in the selected GitHub Environment.
 
 All jobs read a `environment` input (`dev`/`stage`/`prod`, default `dev`) so
 environment-specific variables/secrets can be configured per GitHub Environment (Settings >
