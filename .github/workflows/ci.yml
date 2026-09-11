@@ -298,35 +298,41 @@ jobs:
             }
           };
 
-          const connection = (process.env.SERVICE_BUS_CONNECTION || '').trim();
-          if (connection) process.exit(0);
-
-          const credentials = parseCredentials();
-          const resolved = {
-            SERVICE_BUS_NAMESPACE_FQDN: (process.env.SERVICE_BUS_NAMESPACE_FQDN || '').trim(),
-            AZURE_CLIENT_ID: (process.env.AZURE_CLIENT_ID || credentials.clientId || '').trim(),
-            AZURE_CLIENT_SECRET: (process.env.AZURE_CLIENT_SECRET || credentials.clientSecret || '').trim(),
-            AZURE_TENANT_ID: (process.env.AZURE_TENANT_ID || credentials.tenantId || '').trim()
-          };
-
-          const missing = Object.entries(resolved)
-            .filter(([, value]) => !value)
-            .map(([name]) => name);
-
-          if (missing.length) {
-            console.error(
-              `Missing live pipeline credentials. Provide SERVICE_BUS_CONNECTION, or set ${missing.join(', ')} ` +
-              'directly as repo/environment secrets or vars, or provide the standard AZURE_CREDENTIALS JSON secret.'
-            );
-            process.exit(1);
-          }
-
-          for (const [name, value] of Object.entries(resolved)) {
-            if (name !== 'SERVICE_BUS_NAMESPACE_FQDN') {
+          const exportGithubEnv = (name, value, { mask = true } = {}) => {
+            if (mask) {
               process.stdout.write(`::add-mask::${value}\n`);
             }
             const delimiter = `COPILOT_ENV_${crypto.randomUUID()}`;
             fs.appendFileSync(process.env.GITHUB_ENV, `${name}<<${delimiter}\n${value}\n${delimiter}\n`);
+          };
+
+          const connection = (process.env.SERVICE_BUS_CONNECTION || '').trim();
+          if (connection) {
+            exportGithubEnv('SERVICE_BUS_CONNECTION', connection);
+          } else {
+            const credentials = parseCredentials();
+            const resolved = {
+              SERVICE_BUS_NAMESPACE_FQDN: (process.env.SERVICE_BUS_NAMESPACE_FQDN || '').trim(),
+              AZURE_CLIENT_ID: (process.env.AZURE_CLIENT_ID || credentials.clientId || '').trim(),
+              AZURE_CLIENT_SECRET: (process.env.AZURE_CLIENT_SECRET || credentials.clientSecret || '').trim(),
+              AZURE_TENANT_ID: (process.env.AZURE_TENANT_ID || credentials.tenantId || '').trim()
+            };
+
+            const missing = Object.entries(resolved)
+              .filter(([, value]) => !value)
+              .map(([name]) => name);
+
+            if (missing.length) {
+              console.error(
+                `Missing live pipeline credentials. Provide SERVICE_BUS_CONNECTION, or set ${missing.join(', ')} ` +
+                'directly as repo/environment secrets or vars, or provide the standard AZURE_CREDENTIALS JSON secret.'
+              );
+              process.exit(1);
+            }
+
+            for (const [name, value] of Object.entries(resolved)) {
+              exportGithubEnv(name, value, { mask: name !== 'SERVICE_BUS_NAMESPACE_FQDN' });
+            }
           }
           NODE
       - name: Publish live property request to Service Bus
