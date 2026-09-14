@@ -96,8 +96,8 @@ a test job):
   `allata-llc/pipeline-function` repos). Checks out both repos as siblings, starts the
   `mcp-server` Functions host, then runs `test:integration:mcp` and
   `test:integration:pipeline` (non-live).
-- **`azure-portal-e2e`** - manual only, via `workflow_dispatch` with the
-  `run_azure_portal_e2e` input checked. Runs `test:integration:azure-portal` (the
+- **`azure-portal-e2e`** - runs on every push/PR to `main` (and manual `workflow_dispatch`).
+  Runs `test:integration:azure-portal` (the
   `@azure-portal` scenario in `cope-pipeline-e2e.feature`) headless in CI. Azure AD sign-in
   needs MFA and can't be scripted, so it reuses a Playwright storage state captured locally
   (`npm run auth:azure-portal`) and committed as `.auth/azure-portal-state.enc.b64`, then
@@ -106,7 +106,8 @@ a test job):
   overriding them with repository variables of the same names). For Azure SDK auth, it
   accepts either split `AZURE_CLIENT_ID` / `AZURE_CLIENT_SECRET` / `AZURE_TENANT_ID`
   secrets/vars or the standard `AZURE_CREDENTIALS` JSON secret. The session expires within
-  hours, so re-capture and re-encrypt the state before each run.
+  hours - since this runs on every push, keep it refreshed (a stale session now fails fast
+  with a clear message instead of failing deep into the ~3-5 minute run).
 - **`live-pipeline`** - manual only, via `workflow_dispatch` with the `run_live_pipeline`
   input checked. Publishes a real message to the `cope-requests` Service Bus queue via
   `test:integration:pipeline:live`. Requires the `SERVICE_BUS_CONNECTION` secret.

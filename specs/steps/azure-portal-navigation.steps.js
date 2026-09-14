@@ -33,6 +33,16 @@ Given('I am signed in to the Azure Portal', { timeout: 120 * 1000 }, async funct
   this.azurePage.setDefaultTimeout(100 * 1000);
   this.azurePortal = new AzurePortalPage(this.azurePage);
   await this.azurePortal.gotoPortal();
+
+  // Fail fast (seconds, not the ~3-5 minutes a full run takes) if the captured session expired -
+  // an expired/stale storage state redirects to the Azure AD login page instead of the portal.
+  const landedUrl = this.azurePage.url();
+  assert.ok(
+    !landedUrl.includes('login.microsoftonline.com'),
+    `Azure Portal storage state at "${storageStatePath}" has expired (redirected to Azure AD login). ` +
+      'Re-capture it with "npm run auth:azure-portal", re-encrypt with ' +
+      '"node scripts/crypto-storage-state.js encrypt <passphrase>", and commit/push .auth/azure-portal-state.enc.b64.'
+  );
 });
 
 When('I select the subscription {string}', { timeout: 120 * 1000 }, async function (subscriptionId) {

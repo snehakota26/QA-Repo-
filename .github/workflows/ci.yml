@@ -5,9 +5,11 @@ name: CI
 # playwright.yml). copilot-setup-steps.yml stays separate - it's the special
 # file GitHub's Copilot coding agent uses to prep its own sandbox, not a test job.
 #
-# "bdd" and "integration" run automatically on every push/PR to main.
-# "azure-portal-e2e" and "live-pipeline" only run when explicitly requested via
-# workflow_dispatch inputs (they need manual/live setup - see their job comments).
+# "bdd", "integration" and "azure-portal-e2e" run automatically on every push/PR to main.
+# "azure-portal-e2e" needs its storage state kept fresh (see its job comment) - a stale
+# session fails fast with a clear message instead of burning the full ~3-5 minute run.
+# "live-pipeline" only runs when explicitly requested via the run_live_pipeline
+# workflow_dispatch input (it publishes a real message to the live Service Bus queue).
 #
 # Environment-specific config (Service Bus namespace, storage account, queue
 # names, sibling-repo ref, Azure credentials) is read from a GitHub Environment
@@ -28,10 +30,6 @@ on:
         type: choice
         options: [ dev, stage, prod ]
         default: dev
-      run_azure_portal_e2e:
-        description: 'Also run Cope Pipeline E2E (Azure Portal) - needs a fresh storage state'
-        type: boolean
-        default: false
       run_live_pipeline:
         description: 'Also run Live Pipeline Test - publishes a real Service Bus message'
         type: boolean
@@ -159,20 +157,21 @@ jobs:
         run: cat func.log || true
 
   azure-portal-e2e:
-    name: "Cope Pipeline E2E (Azure Portal, manual) [${{ inputs.environment || 'dev' }}]"
-    # Runs the real Azure Portal UI scenario (cope-pipeline-e2e.feature) headless.
-    # Can't run on every push: Azure AD sign-in needs MFA and can't be scripted, so this
+    name: "Cope Pipeline E2E (Azure Portal) [${{ inputs.environment || 'dev' }}]"
+    # Runs the real Azure Portal UI scenario (cope-pipeline-e2e.feature) headless, automatically
+    # on every push/PR to main (and on manual workflow_dispatch).
+    # Can't script the sign-in itself: Azure AD sign-in needs MFA and can't be scripted, so this
     # reuses a pre-authenticated Playwright storage state captured locally via
-    # `npm run auth:azure-portal`, which expires within a few hours.
+    # `npm run auth:azure-portal`, which expires within a few hours. Since this now runs on every
+    # push, keep that state fresh - a stale session fails fast (seconds) with a clear message
+    # instead of failing deep into the ~3-5 minute run.
     #
-    # Before running (only needed once per re-captured session):
+    # To refresh the session (do this regularly, e.g. before pushing if it's been hours):
     #   1. Locally: npm run auth:azure-portal   (sign in once, captures .auth/azure-portal-state.json)
     #   2. Encrypt it and commit the encrypted blob (never the raw session file):
     #        node scripts/crypto-storage-state.js encrypt <a-passphrase>
     #        git add .auth/azure-portal-state.enc.b64 && git commit -m "Refresh Azure Portal session" && git push
     #   3. The first time only: add the AZURE_PORTAL_STATE_PASSPHRASE secret with that passphrase
-    #   4. Run this workflow with "run_azure_portal_e2e" checked (Actions tab -> CI -> Run workflow)
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_azure_portal_e2e }}
     timeout-minutes: 15
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment || 'dev' }}
