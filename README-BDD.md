@@ -59,10 +59,15 @@ API. Its source contract can be checked locally without Azure credentials:
 npm run test:integration:pipeline
 ```
 
-The live queue scenario requires these `.env` values:
+The live queue scenario requires either a connection string or Azure SDK credentials:
 
 ```text
 SERVICE_BUS_CONNECTION=<Service Bus connection string>
+# or:
+SERVICE_BUS_NAMESPACE_FQDN=cope-pocsb.servicebus.windows.net
+AZURE_CLIENT_ID=<app registration client id>
+AZURE_CLIENT_SECRET=<app registration client secret>
+AZURE_TENANT_ID=<tenant id>
 PIPELINE_QUEUE_NAME=cope-requests
 PIPELINE_FUNCTION_REPO=../pipeline-function
 ```
@@ -110,7 +115,9 @@ a test job):
   with a clear message instead of failing deep into the ~3-5 minute run).
 - **`live-pipeline`** - manual only, via `workflow_dispatch` with the `run_live_pipeline`
   input checked. Publishes a real message to the `cope-requests` Service Bus queue via
-  `test:integration:pipeline:live`. Requires the `SERVICE_BUS_CONNECTION` secret.
+  `test:integration:pipeline:live`. Accepts either the `SERVICE_BUS_CONNECTION` secret/variable or
+  the same Azure SDK credentials used by `azure-portal-e2e` plus a
+  `SERVICE_BUS_NAMESPACE_FQDN` secret/variable in the selected GitHub Environment.
 
 All jobs read a `environment` input (`dev`/`stage`/`prod`, default `dev`) so
 environment-specific variables/secrets can be configured per GitHub Environment (Settings >
@@ -119,4 +126,3 @@ Environments) without editing the workflow.
 Not automated in any job:
 - `test:integration:cope-e2e` - the full end-to-end scenario (Service Bus -> Foundry -> Blob),
   which is only exercised via the Azure Portal UI scenario above.
-
