@@ -125,6 +125,15 @@ Sign-in failures now surface the on-screen Entra message (forced MFA re-registra
 
 The captured storage state (`npm run auth:azure-portal`) still exists as a local-development convenience so you don't re-authenticate on every local run. CI refuses to use it - it expires within hours, so relying on it guarantees a red build eventually.
 
+### 3. Fallback when you don't have Entra admin rights
+
+Creating an app registration is usually self-service, but granting it RBAC on the Service Bus namespace and storage account is not. If you can't get that done, the SDK steps accept long-lived shared secrets instead:
+
+- `SERVICE_BUS_CONNECTION` - a Service Bus connection string.
+- `STORAGE_SAS_URL` - the blob endpoint with a SAS query string appended, or `STORAGE_CONNECTION_STRING`.
+
+This is a deliberate trade-down: unlike OIDC these are bearer secrets that live in GitHub until someone rotates them. Scope them as tightly as the resource allows - a **Send-only** Service Bus authorization rule rather than `RootManageSharedAccessKey`, and a **container-scoped, read/list-only** SAS rather than the storage account key. Move to OIDC once an admin can assign the roles.
+
 ## CI/CD (GitHub Actions)
 
 A single workflow, **`.github/workflows/ci.yml`**, runs all jobs (`copilot-setup-steps.yml`

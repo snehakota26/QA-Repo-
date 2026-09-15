@@ -112,6 +112,7 @@ jobs:
     environment: ${{ inputs.environment || 'dev' }}
     outputs:
       has_azure: ${{ steps.check.outputs.has_azure }}
+      has_data_access: ${{ steps.check.outputs.has_data_access }}
       has_org_token: ${{ steps.check.outputs.has_org_token }}
       has_totp: ${{ steps.check.outputs.has_totp }}
     steps:
@@ -124,16 +125,30 @@ jobs:
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID || vars.AZURE_TENANT_ID }}
           AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
           ORG_REPO_TOKEN: ${{ secrets.ORG_REPO_TOKEN }}
+          SERVICE_BUS_CONNECTION: ${{ secrets.SERVICE_BUS_CONNECTION }}
+          STORAGE_SAS_URL: ${{ secrets.STORAGE_SAS_URL }}
+          STORAGE_CONNECTION_STRING: ${{ secrets.STORAGE_CONNECTION_STRING }}
           AZURE_PORTAL_USERNAME: ${{ secrets.AZURE_PORTAL_USERNAME }}
           AZURE_PORTAL_PASSWORD: ${{ secrets.AZURE_PORTAL_PASSWORD }}
           TOTP_SECRET: ${{ secrets.TOTP_SECRET }}
         run: |
+          # Federated identity - preferred, nothing stored and nothing expires.
           has_azure=false
           if [ -n "$AZURE_CLIENT_ID" ] && [ -n "$AZURE_TENANT_ID" ]; then
-            # OIDC needs only the client and tenant id - the token is minted at run time.
             has_azure=true
           elif [ -n "$AZURE_CREDENTIALS" ]; then
             has_azure=true
+          fi
+
+          # Shared-secret fallback for tenants where app registration/RBAC needs an admin.
+          has_shared_secret=false
+          if [ -n "$SERVICE_BUS_CONNECTION" ] && { [ -n "$STORAGE_SAS_URL" ] || [ -n "$STORAGE_CONNECTION_STRING" ]; }; then
+            has_shared_secret=true
+          fi
+
+          has_data_access=false
+          if [ "$has_azure" = "true" ] || [ "$has_shared_secret" = "true" ]; then
+            has_data_access=true
           fi
 
           has_org_token=false
@@ -146,6 +161,7 @@ jobs:
 
           {
             echo "has_azure=$has_azure"
+            echo "has_data_access=$has_data_access"
             echo "has_org_token=$has_org_token"
             echo "has_totp=$has_totp"
           } >> "$GITHUB_OUTPUT"
@@ -153,10 +169,19 @@ jobs:
           {
             echo "| Credential set | Configured |"
             echo "| --- | --- |"
-            echo "| Azure SDK (OIDC client/tenant id, or AZURE_CREDENTIALS) | $has_azure |"
+            echo "| Azure federated identity (OIDC) | $has_azure |"
+            echo "| Connection string / SAS fallback | $has_shared_secret |"
+            echo "| Azure data-plane access (either of the above) | $has_data_access |"
             echo "| ORG_REPO_TOKEN (private sibling repos) | $has_org_token |"
             echo "| Azure Portal TOTP sign-in | $has_totp |"
           } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$has_totp" != "true" ]; then
+            echo "::warning::Azure Portal TOTP sign-in is not configured - the azure-portal-e2e job will be skipped. Set AZURE_PORTAL_USERNAME, AZURE_PORTAL_PASSWORD and TOTP_SECRET."
+          fi
+          if [ "$has_data_access" != "true" ]; then
+            echo "::warning::No Azure data-plane credentials configured - the Azure jobs will be skipped. Set AZURE_CLIENT_ID/AZURE_TENANT_ID (OIDC), or SERVICE_BUS_CONNECTION plus STORAGE_SAS_URL."
+          fi
 
   integration:
     name: "Integration Tests (MCP server + pipeline-function) [${{ inputs.environment || 'dev' }}]"
@@ -263,7 +288,7 @@ jobs:
     #     a named IP range, since GitHub-hosted runners have neither.
     # See README-BDD.md for the one-time setup. Skips when those secrets aren't configured.
     needs: preflight
-    if: ${{ needs.preflight.outputs.has_totp == 'true' && needs.preflight.outputs.has_azure == 'true' }}
+    if: ${{ needs.preflight.outputs.has_totp == 'true' && needs.preflight.outputs.has_data_access == 'true' }}
     timeout-minutes: 15
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment || 'dev' }}
@@ -284,9 +309,13 @@ jobs:
           AZURE_PORTAL_USERNAME: ${{ secrets.AZURE_PORTAL_USERNAME }}
           AZURE_PORTAL_PASSWORD: ${{ secrets.AZURE_PORTAL_PASSWORD }}
           TOTP_SECRET: ${{ secrets.TOTP_SECRET }}
-          # Federated (OIDC) auth for the Service Bus/Blob assertions in the same scenario.
+          # Federated (OIDC) auth for the Service Bus/Blob assertions in the same scenario,
+          # with connection string / SAS as the no-admin-required fallback.
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID || vars.AZURE_CLIENT_ID }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID || vars.AZURE_TENANT_ID }}
+          SERVICE_BUS_CONNECTION: ${{ secrets.SERVICE_BUS_CONNECTION }}
+          STORAGE_SAS_URL: ${{ secrets.STORAGE_SAS_URL }}
+          STORAGE_CONNECTION_STRING: ${{ secrets.STORAGE_CONNECTION_STRING }}
           # Environment-specific resource names (Settings > Environments > Variables)
           SERVICE_BUS_NAMESPACE_FQDN: ${{ vars.SERVICE_BUS_NAMESPACE_FQDN || 'cope-pocsb.servicebus.windows.net' }}
           STORAGE_ACCOUNT_URL: ${{ vars.STORAGE_ACCOUNT_URL || 'https://copepocsa.blob.core.windows.net' }}
@@ -307,7 +336,7 @@ jobs:
     # browser, no user sign-in, no MFA, no stored secret, nothing that can expire. This is the
     # job that actually proves the pipeline works; azure-portal-e2e only adds UI coverage.
     needs: preflight
-    if: ${{ needs.preflight.outputs.has_azure == 'true' }}
+    if: ${{ needs.preflight.outputs.has_data_access == 'true' }}
     timeout-minutes: 15
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment || 'dev' }}
@@ -324,6 +353,10 @@ jobs:
           # OIDC: the token is requested from GitHub and exchanged with Entra at run time.
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID || vars.AZURE_CLIENT_ID }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID || vars.AZURE_TENANT_ID }}
+          # No-admin-required fallback.
+          SERVICE_BUS_CONNECTION: ${{ secrets.SERVICE_BUS_CONNECTION }}
+          STORAGE_SAS_URL: ${{ secrets.STORAGE_SAS_URL }}
+          STORAGE_CONNECTION_STRING: ${{ secrets.STORAGE_CONNECTION_STRING }}
           # Environment-specific resource names (Settings > Environments > Variables)
           SERVICE_BUS_NAMESPACE_FQDN: ${{ vars.SERVICE_BUS_NAMESPACE_FQDN || 'cope-pocsb.servicebus.windows.net' }}
           STORAGE_ACCOUNT_URL: ${{ vars.STORAGE_ACCOUNT_URL || 'https://copepocsa.blob.core.windows.net' }}

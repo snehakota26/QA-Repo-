@@ -30,12 +30,39 @@ function log(message) {
   console.log(`[cope-pipeline] ${message}`);
 }
 
+// Auth order is deliberate: federated identity first (nothing stored, nothing expires),
+// then shared-secret fallbacks for environments where creating an app registration or
+// assigning RBAC needs an administrator.
+function buildServiceBusClient() {
+  const connection = process.env.SERVICE_BUS_CONNECTION?.trim();
+  if (connection) {
+    log('Service Bus: using SERVICE_BUS_CONNECTION.');
+    return new ServiceBusClient(connection);
+  }
+  log('Service Bus: using Azure identity (OIDC / az login).');
+  return new ServiceBusClient(serviceBusNamespace(), createAzureCredential());
+}
+
+function buildBlobServiceClient() {
+  const sasUrl = process.env.STORAGE_SAS_URL?.trim();
+  if (sasUrl) {
+    log('Blob Storage: using STORAGE_SAS_URL.');
+    return new BlobServiceClient(sasUrl);
+  }
+  const connection = process.env.STORAGE_CONNECTION_STRING?.trim();
+  if (connection) {
+    log('Blob Storage: using STORAGE_CONNECTION_STRING.');
+    return BlobServiceClient.fromConnectionString(connection);
+  }
+  log('Blob Storage: using Azure identity (OIDC / az login).');
+  return new BlobServiceClient(storageAccountUrl(), createAzureCredential());
+}
+
 Given('the Cope Azure pipeline integration is configured', function () {
   log(`Configuring Service Bus (queue "${queueName()}") and Blob Storage (container "${outputContainerName()}") clients...`);
-  const credential = createAzureCredential();
-  this.serviceBusClient = new ServiceBusClient(serviceBusNamespace(), credential);
+  this.serviceBusClient = buildServiceBusClient();
   this.serviceBusSender = this.serviceBusClient.createSender(queueName());
-  this.blobServiceClient = new BlobServiceClient(storageAccountUrl(), credential);
+  this.blobServiceClient = buildBlobServiceClient();
   log('Cope pipeline integration configured.');
 });
 

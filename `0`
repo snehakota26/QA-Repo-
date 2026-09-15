@@ -1,0 +1,1 @@
+C:\Users\SnehaKota_0311q25\AgenticAI>  "C:\Program Files\Microsoft SDKs\Azure\CLI2\wbin\\..\python.exe" -IBm azure.cli servicebus namespace authorization-rule keys list -g cope-platform-poc-rg --namespace-name cope-pocsb -n RootManageSharedAccessKey --query length(primaryConnectionString) -o tsv
