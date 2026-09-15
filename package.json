@@ -15,6 +15,7 @@
     "test:integration:cope-e2e": "npx cucumber-js specs --require specs/support --require specs/steps --tags \"@cope and @live and not @ui\"",
     "test:integration:azure-portal": "npx cucumber-js specs --require specs/support --require specs/steps --tags \"@azure-portal\"",
     "auth:azure-portal": "node scripts/capture-azure-storage-state.js",
+    "totp": "node scripts/totp-code.js",
     "test:bdd:report": "node -e \"require('fs').mkdirSync('reports', { recursive: true })\" && npx cucumber-js specs --require specs/support --require specs/steps --format json:reports/cucumber-report.json && node scripts/generate-report.js",
     "report": "npm run test:bdd:report"
   },
