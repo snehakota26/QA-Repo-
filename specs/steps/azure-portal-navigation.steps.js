@@ -1,22 +1,22 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const path = require('node:path');
 const { chromium } = require('playwright');
 const { Given, When, Then, After } = require('@cucumber/cucumber');
 const { AzurePortalPage } = require('../pages/azure-portal.page');
+const { signInWithTotp } = require('../support/microsoft-login');
 
 const defaultStorageStatePath = path.join(__dirname, '..', '..', '.auth', 'azure-portal-state.json');
 
-// Azure AD sign-in requires MFA and can't be scripted, so this reuses a pre-authenticated
-// Playwright storage state (see https://playwright.dev/docs/auth) captured after a manual login
-// via `npm run auth:azure-portal`. Falls back to the default path so the env var doesn't need
-// to be set in every terminal session; override with AZURE_PORTAL_STORAGE_STATE if needed.
-Given('I am signed in to the Azure Portal', { timeout: 120 * 1000 }, async function () {
-  const storageStatePath = process.env.AZURE_PORTAL_STORAGE_STATE || defaultStorageStatePath;
-  assert.ok(
-    require('node:fs').existsSync(storageStatePath),
-    `No storage state found at ${storageStatePath}. Run "npm run auth:azure-portal" to sign in once and capture it.`
-  );
-
+// Two sign-in paths:
+// 1. TOTP (permanent, no session to expire) - set AZURE_PORTAL_USERNAME/AZURE_PORTAL_PASSWORD/
+//    TOTP_SECRET for a dedicated automation account enrolled with an authenticator app; a real
+//    MFA code is generated and submitted fresh every run, so this never needs manual refresh.
+// 2. Storage state (fallback) - Azure AD sign-in normally requires interactive MFA that can't be
+//    scripted, so this reuses a pre-authenticated Playwright storage state (see
+//    https://playwright.dev/docs/auth) captured via `npm run auth:azure-portal`. Expires within
+//    hours and needs periodic manual re-capture.
+Given('I am signed in to the Azure Portal', { timeout: 180 * 1000 }, async function () {
   // Headed by default so the navigation is visible; set AZURE_PORTAL_HEADLESS=true to run headless.
   // --disable-http2: ARM's batch endpoint (used by the Storage Browser blade) intermittently
   // fails with net::ERR_HTTP2_PROTOCOL_ERROR on this network, which silently hangs the blade's
@@ -26,10 +26,33 @@ Given('I am signed in to the Azure Portal', { timeout: 120 * 1000 }, async funct
     slowMo: 250,
     args: ['--disable-http2']
   });
+
+  const { AZURE_PORTAL_USERNAME, AZURE_PORTAL_PASSWORD, TOTP_SECRET } = process.env;
+  const useTotpLogin = Boolean(AZURE_PORTAL_USERNAME && AZURE_PORTAL_PASSWORD && TOTP_SECRET);
+
+  if (useTotpLogin) {
+    this.azureContext = await this.azureBrowser.newContext();
+    this.azurePage = await this.azureContext.newPage();
+    this.azurePage.setDefaultTimeout(100 * 1000);
+    this.azurePortal = new AzurePortalPage(this.azurePage);
+    await signInWithTotp(this.azurePage, {
+      username: AZURE_PORTAL_USERNAME,
+      password: AZURE_PORTAL_PASSWORD,
+      totpSecret: TOTP_SECRET
+    });
+    return;
+  }
+
+  const storageStatePath = process.env.AZURE_PORTAL_STORAGE_STATE || defaultStorageStatePath;
+  assert.ok(
+    fs.existsSync(storageStatePath),
+    `No storage state found at ${storageStatePath}. Run "npm run auth:azure-portal" to sign in once and capture it, ` +
+      'or set AZURE_PORTAL_USERNAME/AZURE_PORTAL_PASSWORD/TOTP_SECRET to sign in automatically.'
+  );
   this.azureContext = await this.azureBrowser.newContext({ storageState: storageStatePath });
   this.azurePage = await this.azureContext.newPage();
   // Azure Portal's React blades can take a while to load, so allow more than the 30s default
-  // (kept below the 120s per-step Cucumber timeout so a real failure surfaces Playwright's own error).
+  // (kept below the 180s per-step Cucumber timeout so a real failure surfaces Playwright's own error).
   this.azurePage.setDefaultTimeout(100 * 1000);
   this.azurePortal = new AzurePortalPage(this.azurePage);
   await this.azurePortal.gotoPortal();
@@ -41,7 +64,8 @@ Given('I am signed in to the Azure Portal', { timeout: 120 * 1000 }, async funct
     !landedUrl.includes('login.microsoftonline.com'),
     `Azure Portal storage state at "${storageStatePath}" has expired (redirected to Azure AD login). ` +
       'Re-capture it with "npm run auth:azure-portal", re-encrypt with ' +
-      '"node scripts/crypto-storage-state.js encrypt <passphrase>", and commit/push .auth/azure-portal-state.enc.b64.'
+      '"node scripts/crypto-storage-state.js encrypt <passphrase>", and commit/push .auth/azure-portal-state.enc.b64, ' +
+      'or switch to AZURE_PORTAL_USERNAME/AZURE_PORTAL_PASSWORD/TOTP_SECRET for a permanent fix.'
   );
 });
 

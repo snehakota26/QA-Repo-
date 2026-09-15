@@ -160,18 +160,23 @@ jobs:
     name: "Cope Pipeline E2E (Azure Portal) [${{ inputs.environment || 'dev' }}]"
     # Runs the real Azure Portal UI scenario (cope-pipeline-e2e.feature) headless, automatically
     # on every push/PR to main (and on manual workflow_dispatch).
-    # Can't script the sign-in itself: Azure AD sign-in needs MFA and can't be scripted, so this
-    # reuses a pre-authenticated Playwright storage state captured locally via
-    # `npm run auth:azure-portal`, which expires within a few hours. Since this now runs on every
-    # push, keep that state fresh - a stale session fails fast (seconds) with a clear message
-    # instead of failing deep into the ~3-5 minute run.
     #
-    # To refresh the session (do this regularly, e.g. before pushing if it's been hours):
-    #   1. Locally: npm run auth:azure-portal   (sign in once, captures .auth/azure-portal-state.json)
-    #   2. Encrypt it and commit the encrypted blob (never the raw session file):
-    #        node scripts/crypto-storage-state.js encrypt <a-passphrase>
-    #        git add .auth/azure-portal-state.enc.b64 && git commit -m "Refresh Azure Portal session" && git push
-    #   3. The first time only: add the AZURE_PORTAL_STATE_PASSPHRASE secret with that passphrase
+    # Sign-in has two paths (see "Given I am signed in to the Azure Portal" in
+    # specs/steps/azure-portal-navigation.steps.js):
+    #   1. TOTP (preferred, permanent - no session to expire): set AZURE_PORTAL_USERNAME,
+    #      AZURE_PORTAL_PASSWORD and TOTP_SECRET secrets for a dedicated automation account
+    #      enrolled with an authenticator app. A real MFA code is generated and submitted fresh
+    #      every run, so this never needs manual refresh.
+    #   2. Storage state (fallback): Azure AD sign-in normally requires interactive MFA that
+    #      can't be scripted, so this reuses a pre-authenticated Playwright storage state
+    #      captured locally via `npm run auth:azure-portal`, which expires within a few hours -
+    #      a stale session fails fast (seconds) with a clear message instead of failing deep
+    #      into the ~3-5 minute run. To refresh it:
+    #        1. Locally: npm run auth:azure-portal   (sign in once, captures .auth/azure-portal-state.json)
+    #        2. Encrypt it and commit the encrypted blob (never the raw session file):
+    #             node scripts/crypto-storage-state.js encrypt <a-passphrase>
+    #             git add .auth/azure-portal-state.enc.b64 && git commit -m "Refresh Azure Portal session" && git push
+    #        3. The first time only: add the AZURE_PORTAL_STATE_PASSPHRASE secret with that passphrase
     timeout-minutes: 15
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment || 'dev' }}
@@ -186,6 +191,8 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Restore Azure Portal storage state
+        # Only needed for the fallback sign-in path - skipped once TOTP secrets are configured.
+        if: ${{ secrets.TOTP_SECRET == '' }}
         env:
           AZURE_PORTAL_STATE_PASSPHRASE: ${{ secrets.AZURE_PORTAL_STATE_PASSPHRASE }}
         run: node scripts/crypto-storage-state.js decrypt "$AZURE_PORTAL_STATE_PASSPHRASE"
@@ -245,6 +252,11 @@ jobs:
         env:
           AZURE_PORTAL_STORAGE_STATE: ${{ github.workspace }}/.auth/azure-portal-state.json
           AZURE_PORTAL_HEADLESS: 'true'
+          # Preferred sign-in path (permanent, no session to expire) - leave unset to fall back
+          # to the storage-state path above.
+          AZURE_PORTAL_USERNAME: ${{ secrets.AZURE_PORTAL_USERNAME }}
+          AZURE_PORTAL_PASSWORD: ${{ secrets.AZURE_PORTAL_PASSWORD }}
+          TOTP_SECRET: ${{ secrets.TOTP_SECRET }}
           # Environment-specific resource names (Settings > Environments > Variables)
           SERVICE_BUS_NAMESPACE_FQDN: ${{ vars.SERVICE_BUS_NAMESPACE_FQDN || 'cope-pocsb.servicebus.windows.net' }}
           STORAGE_ACCOUNT_URL: ${{ vars.STORAGE_ACCOUNT_URL || 'https://copepocsa.blob.core.windows.net' }}

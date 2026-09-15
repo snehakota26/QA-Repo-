@@ -103,16 +103,27 @@ a test job):
   `test:integration:pipeline` (non-live).
 - **`azure-portal-e2e`** - runs on every push/PR to `main` (and manual `workflow_dispatch`).
   Runs `test:integration:azure-portal` (the
-  `@azure-portal` scenario in `cope-pipeline-e2e.feature`) headless in CI. Azure AD sign-in
-  needs MFA and can't be scripted, so it reuses a Playwright storage state captured locally
-  (`npm run auth:azure-portal`) and committed as `.auth/azure-portal-state.enc.b64`, then
-  decrypted in CI with the `AZURE_PORTAL_STATE_PASSPHRASE` secret. The workflow also sets
+  `@azure-portal` scenario in `cope-pipeline-e2e.feature`) headless in CI. Sign-in has two
+  paths:
+  1. **TOTP (preferred, permanent)** - set `AZURE_PORTAL_USERNAME`, `AZURE_PORTAL_PASSWORD`
+     and `TOTP_SECRET` secrets for a dedicated automation account enrolled with an
+     authenticator app. A real MFA code is generated (`specs/support/totp.js`, RFC 6238) and
+     submitted fresh every run - no session to expire, no manual refresh ever.
+  2. **Storage state (fallback)** - Azure AD sign-in normally requires interactive MFA that
+     can't be scripted, so this reuses a Playwright storage state captured locally
+     (`npm run auth:azure-portal`) and committed as `.auth/azure-portal-state.enc.b64`, then
+     decrypted in CI with the `AZURE_PORTAL_STATE_PASSPHRASE` secret. Expires within hours - a
+     stale session now fails fast with a clear message instead of failing deep into the
+     ~3-5 minute run.
+
+  The workflow also sets
   default values for `SERVICE_BUS_NAMESPACE_FQDN` and `STORAGE_ACCOUNT_URL` (and allows
   overriding them with repository variables of the same names). For Azure SDK auth, it
   accepts either split `AZURE_CLIENT_ID` / `AZURE_CLIENT_SECRET` / `AZURE_TENANT_ID`
   secrets/vars or the standard `AZURE_CREDENTIALS` JSON secret. The session expires within
   hours - since this runs on every push, keep it refreshed (a stale session now fails fast
-  with a clear message instead of failing deep into the ~3-5 minute run).
+  with a clear message instead of failing deep into the ~3-5 minute run), or switch to the
+  TOTP path above for a permanent fix.
 - **`live-pipeline`** - manual only, via `workflow_dispatch` with the `run_live_pipeline`
   input checked. Publishes a real message to the `cope-requests` Service Bus queue via
   `test:integration:pipeline:live`. Accepts either the `SERVICE_BUS_CONNECTION` secret/variable or
