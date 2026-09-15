@@ -20,7 +20,7 @@ test('resolvePipelineServiceBusConfig prefers SERVICE_BUS_CONNECTION when presen
   );
 });
 
-test('connectPipelineServiceBus falls back to namespace + DefaultAzureCredential', () => {
+test('connectPipelineServiceBus falls back to namespace + Azure credential', () => {
   const calls = [];
 
   class FakeCredential {}
@@ -41,7 +41,7 @@ test('connectPipelineServiceBus falls back to namespace + DefaultAzureCredential
     },
     {
       ServiceBusClientImpl: FakeServiceBusClient,
-      DefaultAzureCredentialImpl: FakeCredential
+      createCredential: () => new FakeCredential()
     }
   );
 

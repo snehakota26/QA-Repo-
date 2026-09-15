@@ -90,50 +90,76 @@ Notes
 
 ## CI/CD (GitHub Actions)
 
+## Microsoft authentication
+
+There are two different auth problems here, and conflating them is what caused the expiring-session failures. Neither solution below has anything that expires.
+
+### 1. Service Bus / Blob Storage - GitHub OIDC federated identity
+
+The SDK-based tests never use a user session. The job requests a short-lived token from GitHub and exchanges it with Entra at run time (`specs/support/azure-credential.js`). Nothing is stored, so nothing can go stale. Client secrets are still accepted as a fallback, but they expire (24 months max), so OIDC is preferred.
+
+One-time setup on the app registration:
+
+```powershell
+az ad app federated-credential create --id <APP_OBJECT_ID> --parameters '{
+  "name": "github-agenticai-main",
+  "issuer": "https://token.actions.githubusercontent.com",
+  "subject": "repo:<owner>/<repo>:ref:refs/heads/main",
+  "audiences": ["api://AzureADTokenExchange"]
+}'
+```
+
+Add a second credential with `"subject": "repo:<owner>/<repo>:pull_request"` so PR runs work too. Then set `AZURE_CLIENT_ID` and `AZURE_TENANT_ID` as repository variables (no secret needed) and grant the service principal `Azure Service Bus Data Sender` on the queue and `Storage Blob Data Reader` on the container. The workflow already declares `permissions: id-token: write`.
+
+### 2. Azure Portal UI - TOTP
+
+The portal scenario needs a real user, so it signs in with a dedicated automation account and generates a fresh RFC 6238 code per run (`specs/support/totp.js`). There is no captured session, so there is nothing to refresh.
+
+Set `AZURE_PORTAL_USERNAME`, `AZURE_PORTAL_PASSWORD` and `TOTP_SECRET` as secrets. The account must have:
+
+- the **Software OATH token** (authenticator app) MFA method enrolled - capture the base32 secret shown during enrollment and store it as `TOTP_SECRET`;
+- a password set to **never expire**;
+- **exclusion from Conditional Access policies** that require a compliant or hybrid-joined device, or a named IP range - GitHub-hosted runners satisfy neither. This is the most common cause of a green local run and a red CI run.
+
+Sign-in failures now surface the on-screen Entra message (forced MFA re-registration, expired password, push-notification enforcement, Conditional Access block) instead of timing out after 60 seconds with no explanation.
+
+The captured storage state (`npm run auth:azure-portal`) still exists as a local-development convenience so you don't re-authenticate on every local run. CI refuses to use it - it expires within hours, so relying on it guarantees a red build eventually.
+
+## CI/CD (GitHub Actions)
+
 A single workflow, **`.github/workflows/ci.yml`**, runs all jobs (`copilot-setup-steps.yml`
 is separate - it's the file GitHub's Copilot coding agent uses to prep its own sandbox, not
-a test job):
+a test job).
 
-- **`bdd`** - runs on every push/PR to `main`. Executes all non-`@integration` scenarios. No
-  external dependencies, no secrets required.
-- **`integration`** - runs on every push/PR to `main`. Requires the `ORG_REPO_TOKEN` secret
-  (a PAT with read access to the private `allata-llc/mcp-server` and
-  `allata-llc/pipeline-function` repos). Checks out both repos as siblings, starts the
-  `mcp-server` Functions host, then runs `test:integration:mcp` and
-  `test:integration:pipeline` (non-live).
-- **`azure-portal-e2e`** - runs on every push/PR to `main` (and manual `workflow_dispatch`).
-  Runs `test:integration:azure-portal` (the
-  `@azure-portal` scenario in `cope-pipeline-e2e.feature`) headless in CI. Sign-in has two
-  paths:
-  1. **TOTP (preferred, permanent)** - set `AZURE_PORTAL_USERNAME`, `AZURE_PORTAL_PASSWORD`
-     and `TOTP_SECRET` secrets for a dedicated automation account enrolled with an
-     authenticator app. A real MFA code is generated (`specs/support/totp.js`, RFC 6238) and
-     submitted fresh every run - no session to expire, no manual refresh ever.
-  2. **Storage state (fallback)** - Azure AD sign-in normally requires interactive MFA that
-     can't be scripted, so this reuses a Playwright storage state captured locally
-     (`npm run auth:azure-portal`) and committed as `.auth/azure-portal-state.enc.b64`, then
-     decrypted in CI with the `AZURE_PORTAL_STATE_PASSPHRASE` secret. Expires within hours - a
-     stale session now fails fast with a clear message instead of failing deep into the
-     ~3-5 minute run.
+Every test job runs on each push/PR to `main`, plus a nightly run at 06:00 UTC to catch
+environment drift on quiet days.
 
-  The workflow also sets
-  default values for `SERVICE_BUS_NAMESPACE_FQDN` and `STORAGE_ACCOUNT_URL` (and allows
-  overriding them with repository variables of the same names). For Azure SDK auth, it
-  accepts either split `AZURE_CLIENT_ID` / `AZURE_CLIENT_SECRET` / `AZURE_TENANT_ID`
-  secrets/vars or the standard `AZURE_CREDENTIALS` JSON secret. The session expires within
-  hours - since this runs on every push, keep it refreshed (a stale session now fails fast
-  with a clear message instead of failing deep into the ~3-5 minute run), or switch to the
-  TOTP path above for a permanent fix.
+- **`unit`** - `npm run test:unit` (`node --test`) over `test/`. Pure logic: TOTP code
+  generation against the RFC 4226/4648 vectors, Service Bus payload building.
+- **`bdd`** - `npm run test:validate`, a Cucumber `--dry-run` that parses every feature file
+  and binds each step to a definition without executing it, so undefined/ambiguous/renamed
+  steps fail the build. Then runs the non-`@integration` scenarios.
+- **`integration`** - MCP server + `pipeline-function` contract tests. Needs `ORG_REPO_TOKEN`
+  (read access to the private `allata-llc/mcp-server` and `allata-llc/pipeline-function`
+  repos); skips rather than fails when absent, e.g. on fork PRs.
+- **`cope-pipeline-e2e`** - `test:integration:cope-e2e`, the browserless end-to-end scenario
+  (Service Bus -> Foundry -> Blob) over the Azure SDK with OIDC auth. No browser, no user
+  sign-in, no MFA, no stored secret. This is the job that actually proves the pipeline works.
+- **`azure-portal-e2e`** - the `@azure-portal` scenario, driving the real Portal UI headless
+  with TOTP sign-in. Adds UI coverage on top of the headless job.
 - **`live-pipeline`** - manual only, via `workflow_dispatch` with the `run_live_pipeline`
-  input checked. Publishes a real message to the `cope-requests` Service Bus queue via
-  `test:integration:pipeline:live`. Accepts either the `SERVICE_BUS_CONNECTION` secret/variable or
-  the same Azure SDK credentials used by `azure-portal-e2e` plus a
-  `SERVICE_BUS_NAMESPACE_FQDN` secret/variable in the selected GitHub Environment.
+  input checked. Publishes a real message to the `cope-requests` queue.
 
-All jobs read a `environment` input (`dev`/`stage`/`prod`, default `dev`) so
+A **`preflight`** job reports which credential sets are configured and publishes them as job
+outputs; credential-dependent jobs gate on those outputs, so an unconfigured job is
+**skipped** (a skipped job does not fail the run) instead of failing with a
+missing-credentials error. This indirection is necessary because the `secrets` context is
+not available in job or step `if:` conditions. Nothing uses `continue-on-error` - a failing
+test always fails its job.
+
+Workflows set default values for `SERVICE_BUS_NAMESPACE_FQDN` and `STORAGE_ACCOUNT_URL`,
+overridable with repository variables of the same names.
+
+All jobs read an `environment` input (`dev`/`stage`/`prod`, default `dev`) so
 environment-specific variables/secrets can be configured per GitHub Environment (Settings >
 Environments) without editing the workflow.
-
-Not automated in any job:
-- `test:integration:cope-e2e` - the full end-to-end scenario (Service Bus -> Foundry -> Blob),
-  which is only exercised via the Azure Portal UI scenario above.

@@ -5,11 +5,23 @@ name: CI
 # playwright.yml). copilot-setup-steps.yml stays separate - it's the special
 # file GitHub's Copilot coding agent uses to prep its own sandbox, not a test job.
 #
-# "bdd", "integration" and "azure-portal-e2e" run automatically on every push/PR to main.
-# "azure-portal-e2e" needs its storage state kept fresh (see its job comment) - a stale
-# session fails fast with a clear message instead of burning the full ~3-5 minute run.
-# "live-pipeline" only runs when explicitly requested via the run_live_pipeline
-# workflow_dispatch input (it publishes a real message to the live Service Bus queue).
+# Microsoft auth is handled so that nothing in this pipeline can expire:
+#
+#   Service Bus / Blob (machine-to-machine) -> GitHub OIDC federated identity. The job
+#   requests a short-lived token from GitHub and exchanges it with Entra at run time. There
+#   is no stored secret and no session, so it cannot go stale. Client secrets are still
+#   accepted as a fallback, but they expire (max 24 months) and OIDC is preferred.
+#
+#   Azure Portal UI (user sign-in) -> TOTP. A real MFA code is generated per run from
+#   TOTP_SECRET (specs/support/totp.js, RFC 6238), so there is no captured session to
+#   refresh. The old storage-state path is local-development only; CI refuses it because it
+#   expires within hours and would guarantee a red build eventually.
+#
+# All test jobs therefore run on every push/PR. Credential-dependent jobs are gated on the
+# "preflight" job, which reports which secrets are configured, so an unconfigured job is
+# SKIPPED (a skipped job does not fail the run) instead of failing on missing credentials.
+# This indirection is required because the "secrets" context is NOT available in "if:".
+# Nothing uses continue-on-error: a failing test always fails its job.
 #
 # Environment-specific config (Service Bus namespace, storage account, queue
 # names, sibling-repo ref, Azure credentials) is read from a GitHub Environment
@@ -18,11 +30,20 @@ name: CI
 # variable/secret names and different values. Only "dev" exists today - add
 # "stage"/"prod" GitHub Environments when those are ready, no workflow changes needed.
 run-name: "CI (${{ inputs.environment || 'dev' }} environment)"
+
+# Required for the OIDC token request; contents:read is the usual companion.
+permissions:
+  id-token: write
+  contents: read
+
 on:
   push:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  schedule:
+    # Nightly safety net - catches environment drift on days with no pushes.
+    - cron: '0 6 * * *'
   workflow_dispatch:
     inputs:
       environment:
@@ -36,6 +57,20 @@ on:
         default: false
 
 jobs:
+  unit:
+    name: "Unit Tests [${{ inputs.environment || 'dev' }}]"
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+      - name: Install dependencies
+        run: npm ci
+      - name: Run unit tests
+        run: npm run test:unit
+
   bdd:
     name: "BDD Tests (Cucumber) [${{ inputs.environment || 'dev' }}]"
     timeout-minutes: 30
@@ -50,6 +85,11 @@ jobs:
         run: npm ci
       - name: Install Playwright Browsers
         run: npx playwright install --with-deps
+      # Parses every feature file and binds each step to a definition without executing
+      # anything. Catches undefined/ambiguous/renamed steps - the failure a push can
+      # actually introduce - with no Azure or MCP dependency.
+      - name: Validate all feature files (dry run)
+        run: npm run test:validate
       # Non-@integration scenarios only - no live Azure/MCP dependencies required
       - name: Run BDD scenarios
         run: |
@@ -65,10 +105,66 @@ jobs:
           path: reports/
           retention-days: 30
 
+  preflight:
+    name: "Preflight (detect configured credentials) [${{ inputs.environment || 'dev' }}]"
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment || 'dev' }}
+    outputs:
+      has_azure: ${{ steps.check.outputs.has_azure }}
+      has_org_token: ${{ steps.check.outputs.has_org_token }}
+      has_totp: ${{ steps.check.outputs.has_totp }}
+    steps:
+      # Secrets can't be read in "if:" conditions, but they can be read as step env vars,
+      # so their presence is converted into job outputs for downstream jobs to gate on.
+      - id: check
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID || vars.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET || vars.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID || vars.AZURE_TENANT_ID }}
+          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+          ORG_REPO_TOKEN: ${{ secrets.ORG_REPO_TOKEN }}
+          AZURE_PORTAL_USERNAME: ${{ secrets.AZURE_PORTAL_USERNAME }}
+          AZURE_PORTAL_PASSWORD: ${{ secrets.AZURE_PORTAL_PASSWORD }}
+          TOTP_SECRET: ${{ secrets.TOTP_SECRET }}
+        run: |
+          has_azure=false
+          if [ -n "$AZURE_CLIENT_ID" ] && [ -n "$AZURE_TENANT_ID" ]; then
+            # OIDC needs only the client and tenant id - the token is minted at run time.
+            has_azure=true
+          elif [ -n "$AZURE_CREDENTIALS" ]; then
+            has_azure=true
+          fi
+
+          has_org_token=false
+          if [ -n "$ORG_REPO_TOKEN" ]; then has_org_token=true; fi
+
+          has_totp=false
+          if [ -n "$AZURE_PORTAL_USERNAME" ] && [ -n "$AZURE_PORTAL_PASSWORD" ] && [ -n "$TOTP_SECRET" ]; then
+            has_totp=true
+          fi
+
+          {
+            echo "has_azure=$has_azure"
+            echo "has_org_token=$has_org_token"
+            echo "has_totp=$has_totp"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "| Credential set | Configured |"
+            echo "| --- | --- |"
+            echo "| Azure SDK (OIDC client/tenant id, or AZURE_CREDENTIALS) | $has_azure |"
+            echo "| ORG_REPO_TOKEN (private sibling repos) | $has_org_token |"
+            echo "| Azure Portal TOTP sign-in | $has_totp |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   integration:
     name: "Integration Tests (MCP server + pipeline-function) [${{ inputs.environment || 'dev' }}]"
     # Requires the ORG_REPO_TOKEN secret (read access to the private
-    # allata-llc/mcp-server and allata-llc/pipeline-function repos).
+    # allata-llc/mcp-server and allata-llc/pipeline-function repos). Skips - does not
+    # fail - when that token isn't available, e.g. on fork PRs.
+    needs: preflight
+    if: ${{ needs.preflight.outputs.has_org_token == 'true' }}
     timeout-minutes: 20
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment || 'dev' }}
@@ -158,25 +254,16 @@ jobs:
 
   azure-portal-e2e:
     name: "Cope Pipeline E2E (Azure Portal) [${{ inputs.environment || 'dev' }}]"
-    # Runs the real Azure Portal UI scenario (cope-pipeline-e2e.feature) headless, automatically
-    # on every push/PR to main (and on manual workflow_dispatch).
-    #
-    # Sign-in has two paths (see "Given I am signed in to the Azure Portal" in
-    # specs/steps/azure-portal-navigation.steps.js):
-    #   1. TOTP (preferred, permanent - no session to expire): set AZURE_PORTAL_USERNAME,
-    #      AZURE_PORTAL_PASSWORD and TOTP_SECRET secrets for a dedicated automation account
-    #      enrolled with an authenticator app. A real MFA code is generated and submitted fresh
-    #      every run, so this never needs manual refresh.
-    #   2. Storage state (fallback): Azure AD sign-in normally requires interactive MFA that
-    #      can't be scripted, so this reuses a pre-authenticated Playwright storage state
-    #      captured locally via `npm run auth:azure-portal`, which expires within a few hours -
-    #      a stale session fails fast (seconds) with a clear message instead of failing deep
-    #      into the ~3-5 minute run. To refresh it:
-    #        1. Locally: npm run auth:azure-portal   (sign in once, captures .auth/azure-portal-state.json)
-    #        2. Encrypt it and commit the encrypted blob (never the raw session file):
-    #             node scripts/crypto-storage-state.js encrypt <a-passphrase>
-    #             git add .auth/azure-portal-state.enc.b64 && git commit -m "Refresh Azure Portal session" && git push
-    #        3. The first time only: add the AZURE_PORTAL_STATE_PASSPHRASE secret with that passphrase
+    # Runs on every push/PR. Signs in with a real TOTP code generated per run, so there is no
+    # session to expire and nothing to refresh manually. Requires a dedicated automation
+    # account (AZURE_PORTAL_USERNAME/AZURE_PORTAL_PASSWORD/TOTP_SECRET) with:
+    #   - the "Software OATH token" / authenticator app MFA method enrolled,
+    #   - a password set to never expire,
+    #   - exclusion from Conditional Access rules that require a compliant/managed device or
+    #     a named IP range, since GitHub-hosted runners have neither.
+    # See README-BDD.md for the one-time setup. Skips when those secrets aren't configured.
+    needs: preflight
+    if: ${{ needs.preflight.outputs.has_totp == 'true' && needs.preflight.outputs.has_azure == 'true' }}
     timeout-minutes: 15
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment || 'dev' }}
@@ -190,73 +277,16 @@ jobs:
       - name: Install Playwright Browsers
         run: npx playwright install --with-deps chromium
 
-      - name: Restore Azure Portal storage state
-        # Only needed for the fallback sign-in path - skipped once TOTP secrets are configured.
-        if: ${{ secrets.TOTP_SECRET == '' }}
-        env:
-          AZURE_PORTAL_STATE_PASSPHRASE: ${{ secrets.AZURE_PORTAL_STATE_PASSPHRASE }}
-        run: node scripts/crypto-storage-state.js decrypt "$AZURE_PORTAL_STATE_PASSPHRASE"
-
-      # Accepts split AZURE_CLIENT_ID/SECRET/TENANT_ID secrets/vars or the standard AZURE_CREDENTIALS JSON secret
-      - name: Resolve Azure SDK credentials
-        env:
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID || vars.AZURE_CLIENT_ID }}
-          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET || vars.AZURE_CLIENT_SECRET }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID || vars.AZURE_TENANT_ID }}
-          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
-        run: |
-          node - <<'NODE'
-          const crypto = require('node:crypto');
-          const fs = require('node:fs');
-
-          const parseCredentials = () => {
-            if (!process.env.AZURE_CREDENTIALS) return {};
-            try {
-              return JSON.parse(process.env.AZURE_CREDENTIALS);
-            } catch (error) {
-              console.error('AZURE_CREDENTIALS is not valid JSON.');
-              throw error;
-            }
-          };
-
-          const credentials = parseCredentials();
-          const resolved = {
-            AZURE_CLIENT_ID: (process.env.AZURE_CLIENT_ID || credentials.clientId || '').trim(),
-            AZURE_CLIENT_SECRET: (process.env.AZURE_CLIENT_SECRET || credentials.clientSecret || '').trim(),
-            AZURE_TENANT_ID: (process.env.AZURE_TENANT_ID || credentials.tenantId || '').trim()
-          };
-
-          const missing = Object.entries(resolved)
-            .filter(([, value]) => !value)
-            .map(([name]) => name);
-
-          if (missing.length) {
-            console.error(
-              `Missing Azure SDK credentials: ${missing.join(', ')}. ` +
-              'Set AZURE_CLIENT_ID/AZURE_CLIENT_SECRET/AZURE_TENANT_ID as repo secrets or vars, ' +
-              'or provide the standard AZURE_CREDENTIALS JSON secret.'
-            );
-            process.exit(1);
-          }
-
-          for (const [name, value] of Object.entries(resolved)) {
-            if (name !== 'SERVICE_BUS_NAMESPACE_FQDN') {
-              process.stdout.write(`::add-mask::${value}\n`);
-            }
-            const delimiter = `COPILOT_ENV_${crypto.randomUUID()}`;
-            fs.appendFileSync(process.env.GITHUB_ENV, `${name}<<${delimiter}\n${value}\n${delimiter}\n`);
-          }
-          NODE
-
       - name: Run Cope pipeline E2E (Azure Portal)
         env:
-          AZURE_PORTAL_STORAGE_STATE: ${{ github.workspace }}/.auth/azure-portal-state.json
           AZURE_PORTAL_HEADLESS: 'true'
-          # Preferred sign-in path (permanent, no session to expire) - leave unset to fall back
-          # to the storage-state path above.
+          # A fresh MFA code is generated per run - no stored session, nothing to expire.
           AZURE_PORTAL_USERNAME: ${{ secrets.AZURE_PORTAL_USERNAME }}
           AZURE_PORTAL_PASSWORD: ${{ secrets.AZURE_PORTAL_PASSWORD }}
           TOTP_SECRET: ${{ secrets.TOTP_SECRET }}
+          # Federated (OIDC) auth for the Service Bus/Blob assertions in the same scenario.
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID || vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID || vars.AZURE_TENANT_ID }}
           # Environment-specific resource names (Settings > Environments > Variables)
           SERVICE_BUS_NAMESPACE_FQDN: ${{ vars.SERVICE_BUS_NAMESPACE_FQDN || 'cope-pocsb.servicebus.windows.net' }}
           STORAGE_ACCOUNT_URL: ${{ vars.STORAGE_ACCOUNT_URL || 'https://copepocsa.blob.core.windows.net' }}
@@ -270,11 +300,41 @@ jobs:
           path: test-results/
           retention-days: 14
 
+  cope-pipeline-e2e:
+    name: "Cope Pipeline E2E (headless, Azure SDK) [${{ inputs.environment || 'dev' }}]"
+    # Runs on every push/PR. Same end-to-end path as azure-portal-e2e (Service Bus -> Foundry
+    # -> Blob) but driven straight through the Azure SDK with federated (OIDC) auth: no
+    # browser, no user sign-in, no MFA, no stored secret, nothing that can expire. This is the
+    # job that actually proves the pipeline works; azure-portal-e2e only adds UI coverage.
+    needs: preflight
+    if: ${{ needs.preflight.outputs.has_azure == 'true' }}
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment || 'dev' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Cope pipeline E2E (headless)
+        env:
+          # OIDC: the token is requested from GitHub and exchanged with Entra at run time.
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID || vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID || vars.AZURE_TENANT_ID }}
+          # Environment-specific resource names (Settings > Environments > Variables)
+          SERVICE_BUS_NAMESPACE_FQDN: ${{ vars.SERVICE_BUS_NAMESPACE_FQDN || 'cope-pocsb.servicebus.windows.net' }}
+          STORAGE_ACCOUNT_URL: ${{ vars.STORAGE_ACCOUNT_URL || 'https://copepocsa.blob.core.windows.net' }}
+          COPE_QUEUE_NAME: ${{ vars.COPE_QUEUE_NAME || 'cope-requests' }}
+        run: npm run test:integration:cope-e2e
+
   live-pipeline:
     name: "Live Pipeline Test (manual, hits real Service Bus) [${{ inputs.environment || 'dev' }}]"
     # Publishes a real message to the Service Bus queue. Manual-only - never runs
-    # automatically. Accepts either SERVICE_BUS_CONNECTION or the same Azure SDK
-    # credentials used by azure-portal-e2e.
+    # automatically. Uses the same OIDC federated identity as the other Azure jobs, or a
+    # SERVICE_BUS_CONNECTION string if one is configured.
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_live_pipeline }}
     timeout-minutes: 10
     runs-on: ubuntu-latest
@@ -286,67 +346,11 @@ jobs:
           node-version: lts/*
       - name: Install dependencies
         run: npm ci
-      - name: Resolve Azure SDK credentials
-        env:
-          SERVICE_BUS_CONNECTION: ${{ secrets.SERVICE_BUS_CONNECTION || vars.SERVICE_BUS_CONNECTION }}
-          SERVICE_BUS_NAMESPACE_FQDN: ${{ secrets.SERVICE_BUS_NAMESPACE_FQDN || vars.SERVICE_BUS_NAMESPACE_FQDN }}
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID || vars.AZURE_CLIENT_ID }}
-          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET || vars.AZURE_CLIENT_SECRET }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID || vars.AZURE_TENANT_ID }}
-          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
-        run: |
-          node - <<'NODE'
-          const crypto = require('node:crypto');
-          const fs = require('node:fs');
-
-          const parseCredentials = () => {
-            if (!process.env.AZURE_CREDENTIALS) return {};
-            try {
-              return JSON.parse(process.env.AZURE_CREDENTIALS);
-            } catch (error) {
-              console.error('AZURE_CREDENTIALS is not valid JSON.');
-              throw error;
-            }
-          };
-
-          const exportGithubEnv = (name, value, { mask = true } = {}) => {
-            if (mask) {
-              process.stdout.write(`::add-mask::${value}\n`);
-            }
-            const delimiter = `COPILOT_ENV_${crypto.randomUUID()}`;
-            fs.appendFileSync(process.env.GITHUB_ENV, `${name}<<${delimiter}\n${value}\n${delimiter}\n`);
-          };
-
-          const connection = (process.env.SERVICE_BUS_CONNECTION || '').trim();
-          if (connection) {
-            exportGithubEnv('SERVICE_BUS_CONNECTION', connection);
-          } else {
-            const credentials = parseCredentials();
-            const resolved = {
-              SERVICE_BUS_NAMESPACE_FQDN: (process.env.SERVICE_BUS_NAMESPACE_FQDN || '').trim(),
-              AZURE_CLIENT_ID: (process.env.AZURE_CLIENT_ID || credentials.clientId || '').trim(),
-              AZURE_CLIENT_SECRET: (process.env.AZURE_CLIENT_SECRET || credentials.clientSecret || '').trim(),
-              AZURE_TENANT_ID: (process.env.AZURE_TENANT_ID || credentials.tenantId || '').trim()
-            };
-
-            const missing = Object.entries(resolved)
-              .filter(([, value]) => !value)
-              .map(([name]) => name);
-
-            if (missing.length) {
-              console.error(
-                `Missing live pipeline credentials. Provide SERVICE_BUS_CONNECTION, or set ${missing.join(', ')} ` +
-                'directly as repo/environment secrets or vars, or provide the standard AZURE_CREDENTIALS JSON secret.'
-              );
-              process.exit(1);
-            }
-
-            for (const [name, value] of Object.entries(resolved)) {
-              exportGithubEnv(name, value, { mask: name !== 'SERVICE_BUS_NAMESPACE_FQDN' });
-            }
-          }
-          NODE
       - name: Publish live property request to Service Bus
         env:
+          SERVICE_BUS_CONNECTION: ${{ secrets.SERVICE_BUS_CONNECTION }}
+          SERVICE_BUS_NAMESPACE_FQDN: ${{ vars.SERVICE_BUS_NAMESPACE_FQDN || 'cope-pocsb.servicebus.windows.net' }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID || vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID || vars.AZURE_TENANT_ID }}
           PIPELINE_QUEUE_NAME: ${{ vars.COPE_QUEUE_NAME || 'cope-requests' }}
         run: npm run test:integration:pipeline:live

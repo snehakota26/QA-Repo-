@@ -6,8 +6,9 @@ node_modules/
 /playwright/.cache/
 /playwright/.auth/
 /reports/
-/.auth/*
-!/.auth/azure-portal-state.enc.b64
+# Captured Azure Portal sessions are local-development only and expire within hours.
+# CI signs in with TOTP instead, so no session artifact is ever committed.
+/.auth/
 
 # Secrets
 .env

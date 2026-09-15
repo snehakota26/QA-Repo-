@@ -9,13 +9,12 @@ const { signInWithTotp } = require('../support/microsoft-login');
 const defaultStorageStatePath = path.join(__dirname, '..', '..', '.auth', 'azure-portal-state.json');
 
 // Two sign-in paths:
-// 1. TOTP (permanent, no session to expire) - set AZURE_PORTAL_USERNAME/AZURE_PORTAL_PASSWORD/
+// 1. TOTP (the only path used in CI) - set AZURE_PORTAL_USERNAME/AZURE_PORTAL_PASSWORD/
 //    TOTP_SECRET for a dedicated automation account enrolled with an authenticator app; a real
-//    MFA code is generated and submitted fresh every run, so this never needs manual refresh.
-// 2. Storage state (fallback) - Azure AD sign-in normally requires interactive MFA that can't be
-//    scripted, so this reuses a pre-authenticated Playwright storage state (see
-//    https://playwright.dev/docs/auth) captured via `npm run auth:azure-portal`. Expires within
-//    hours and needs periodic manual re-capture.
+//    MFA code is generated and submitted fresh every run, so there is nothing to expire.
+// 2. Storage state (local development only) - reuses a session captured via
+//    `npm run auth:azure-portal` so you don't re-authenticate on every local run. It expires
+//    within hours, which is why CI refuses to use it.
 Given('I am signed in to the Azure Portal', { timeout: 180 * 1000 }, async function () {
   // Headed by default so the navigation is visible; set AZURE_PORTAL_HEADLESS=true to run headless.
   // --disable-http2: ARM's batch endpoint (used by the Storage Browser blade) intermittently
@@ -43,6 +42,14 @@ Given('I am signed in to the Azure Portal', { timeout: 180 * 1000 }, async funct
     return;
   }
 
+  // A captured session expires within hours, so in CI it is guaranteed to fail sooner or
+  // later. Refusing it here makes that a configuration error instead of a random red build.
+  assert.ok(
+    !process.env.CI,
+    'Azure Portal sign-in in CI requires AZURE_PORTAL_USERNAME, AZURE_PORTAL_PASSWORD and TOTP_SECRET. ' +
+      'The captured storage state is for local development only - it expires within hours.'
+  );
+
   const storageStatePath = process.env.AZURE_PORTAL_STORAGE_STATE || defaultStorageStatePath;
   assert.ok(
     fs.existsSync(storageStatePath),
@@ -63,9 +70,8 @@ Given('I am signed in to the Azure Portal', { timeout: 180 * 1000 }, async funct
   assert.ok(
     !landedUrl.includes('login.microsoftonline.com'),
     `Azure Portal storage state at "${storageStatePath}" has expired (redirected to Azure AD login). ` +
-      'Re-capture it with "npm run auth:azure-portal", re-encrypt with ' +
-      '"node scripts/crypto-storage-state.js encrypt <passphrase>", and commit/push .auth/azure-portal-state.enc.b64, ' +
-      'or switch to AZURE_PORTAL_USERNAME/AZURE_PORTAL_PASSWORD/TOTP_SECRET for a permanent fix.'
+      'Re-capture it with "npm run auth:azure-portal", or set ' +
+      'AZURE_PORTAL_USERNAME/AZURE_PORTAL_PASSWORD/TOTP_SECRET for a permanent fix.'
   );
 });
 

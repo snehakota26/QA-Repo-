@@ -1,8 +1,8 @@
 const assert = require('node:assert/strict');
-const { DefaultAzureCredential } = require('@azure/identity');
 const { ServiceBusClient } = require('@azure/service-bus');
 const { BlobServiceClient } = require('@azure/storage-blob');
 const { Given, When, Then } = require('@cucumber/cucumber');
+const { createAzureCredential } = require('../support/azure-credential');
 
 const serviceBusNamespace = () => {
   const fqdn = process.env.SERVICE_BUS_NAMESPACE_FQDN;
@@ -32,7 +32,7 @@ function log(message) {
 
 Given('the Cope Azure pipeline integration is configured', function () {
   log(`Configuring Service Bus (queue "${queueName()}") and Blob Storage (container "${outputContainerName()}") clients...`);
-  const credential = new DefaultAzureCredential();
+  const credential = createAzureCredential();
   this.serviceBusClient = new ServiceBusClient(serviceBusNamespace(), credential);
   this.serviceBusSender = this.serviceBusClient.createSender(queueName());
   this.blobServiceClient = new BlobServiceClient(storageAccountUrl(), credential);

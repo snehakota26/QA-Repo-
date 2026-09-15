@@ -39,4 +39,10 @@ function generateTotp(base32Secret, { step = 30, digits = 6, timestamp = Date.no
   return generateHotp(key, counter, { digits });
 }
 
-module.exports = { base32Decode, generateHotp, generateTotp };
+// Seconds left before the current code rotates. Submitting a code in its last moments is a
+// common CI flake: it expires between being typed and being validated server-side.
+function secondsRemainingInWindow({ step = 30, timestamp = Date.now() } = {}) {
+  return step - (Math.floor(timestamp / 1000) % step);
+}
+
+module.exports = { base32Decode, generateHotp, generateTotp, secondsRemainingInWindow };

@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
-const { DefaultAzureCredential } = require('@azure/identity');
 const { ServiceBusClient } = require('@azure/service-bus');
+const { createAzureCredential } = require('./azure-credential');
 
 function resolvePipelineServiceBusConfig(env = process.env) {
   const connection = env.SERVICE_BUS_CONNECTION?.trim();
@@ -23,7 +23,7 @@ function connectPipelineServiceBus(
   env = process.env,
   {
     ServiceBusClientImpl = ServiceBusClient,
-    DefaultAzureCredentialImpl = DefaultAzureCredential
+    createCredential = createAzureCredential
   } = {}
 ) {
   const config = resolvePipelineServiceBusConfig(env);
@@ -31,7 +31,7 @@ function connectPipelineServiceBus(
     ? new ServiceBusClientImpl(config.connection)
     : new ServiceBusClientImpl(
         config.fullyQualifiedNamespace,
-        new DefaultAzureCredentialImpl()
+        createCredential(env)
       );
 
   return {
