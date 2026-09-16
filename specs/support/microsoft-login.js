@@ -52,15 +52,23 @@ async function assertNoBlockingInterstitial(page) {
   }
 }
 
-const PORTAL_URL_PART = 'portal.azure.com';
+const PORTAL_HOST = 'portal.azure.com';
 
-// Reaching the portal is the only reliable "authenticated" signal: the sign-in journey spans
-// several Microsoft hosts (login.microsoftonline.com, login.microsoft.com for the FIDO
-// bridge), so "left the login host" wrongly reports success midway through.
-const onPortal = page => page.url().includes(PORTAL_URL_PART);
+// Must compare the host, not test for a substring: the sign-in URL carries
+// redirect_uri=https://portal.azure.com/..., so a substring check reports "signed in" while
+// still sitting on the login page.
+function isPortalUrl(value) {
+  try {
+    return (typeof value === 'string' ? new URL(value) : value).hostname === PORTAL_HOST;
+  } catch {
+    return false;
+  }
+}
+
+const onPortal = page => isPortalUrl(page.url());
 
 function waitUntilOnPortal(page, timeout) {
-  return page.waitForURL(url => String(url).includes(PORTAL_URL_PART), { timeout });
+  return page.waitForURL(url => isPortalUrl(url), { timeout });
 }
 
 // Passkey-first tenants open a FIDO prompt instead of asking for a password, and offer the
