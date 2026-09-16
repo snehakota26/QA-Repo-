@@ -1,11 +1,12 @@
 // Prints the current TOTP code for TOTP_SECRET so you can verify a seed copied during
 // authenticator enrollment actually works, before putting it in GitHub secrets.
-// Usage: $env:TOTP_SECRET="<base32 seed>"; npm run totp
+// Put TOTP_SECRET in .env (gitignored) to keep the seed out of shell history.
 const { generateTotp, secondsRemainingInWindow } = require('../specs/support/totp');
+require('dotenv').config();
 
 const secret = (process.env.TOTP_SECRET || '').trim();
 if (!secret) {
-  console.error('Set TOTP_SECRET first, e.g. $env:TOTP_SECRET="JBSWY3DPEHPK3PXP"; npm run totp');
+  console.error('Set TOTP_SECRET in .env (preferred) or as an environment variable, then run: npm run totp');
   process.exit(1);
 }
 
