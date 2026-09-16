@@ -20,10 +20,20 @@ Given('I am signed in to the Azure Portal', { timeout: 180 * 1000 }, async funct
   // --disable-http2: ARM's batch endpoint (used by the Storage Browser blade) intermittently
   // fails with net::ERR_HTTP2_PROTOCOL_ERROR on this network, which silently hangs the blade's
   // "Loading..." state forever; forcing HTTP/1.1 avoids that failure mode.
+  const launchArgs = ['--disable-http2'];
+
+  // Set AZURE_PORTAL_FORCE_LOGIN=true to disable Kerberos/NTLM integrated auth. Note this
+  // does not defeat device-certificate SSO on an Entra-joined machine, where sign-in
+  // completes without credentials regardless - the password/TOTP path only really runs on a
+  // non-joined host such as a CI runner.
+  if (process.env.AZURE_PORTAL_FORCE_LOGIN === 'true') {
+    launchArgs.push('--auth-server-allowlist=.invalid', '--auth-negotiate-delegate-allowlist=.invalid');
+  }
+
   this.azureBrowser = await chromium.launch({
     headless: process.env.AZURE_PORTAL_HEADLESS === 'true',
     slowMo: 250,
-    args: ['--disable-http2']
+    args: launchArgs
   });
 
   const { AZURE_PORTAL_USERNAME, AZURE_PORTAL_PASSWORD, TOTP_SECRET } = process.env;

@@ -52,14 +52,64 @@ async function assertNoBlockingInterstitial(page) {
   }
 }
 
+const LOGIN_HOST = 'login.microsoftonline.com';
+
+const onLoginHost = page => page.url().includes(LOGIN_HOST);
+
+// Entra-joined machines complete sign-in via Seamless SSO without ever showing the password
+// prompt, while CI runners always have to type it. Leaving the login host is the signal that
+// authentication finished, whichever route it took.
+function waitUntilOffLoginHost(page, timeout) {
+  return page.waitForURL(url => !String(url).includes(LOGIN_HOST), { timeout });
+}
+
 async function signInWithTotp(page, { username, password, totpSecret }) {
   await page.goto('https://portal.azure.com/#home');
 
-  await page.getByPlaceholder('Email, phone, or Skype').fill(username);
-  await page.getByRole('button', { name: 'Next' }).click();
-  await assertNoSignInError(page, 'username');
+  const emailInput = page.getByPlaceholder('Email, phone, or Skype');
+  const sawEmailPrompt = await emailInput
+    .waitFor({ state: 'visible', timeout: 30 * 1000 })
+    .then(() => true)
+    .catch(() => false);
 
-  await page.getByPlaceholder('Password').fill(password);
+  if (!sawEmailPrompt) {
+    if (!onLoginHost(page)) {
+      console.log('[microsoft-login] Already signed in (single sign-on) - no credentials needed.');
+      return;
+    }
+    throw new Error(`Stalled on the sign-in page without a username field. Current URL: ${page.url()}`);
+  }
+
+  await emailInput.fill(username);
+  await page.getByRole('button', { name: 'Next' }).click();
+
+  const passwordInput = page.getByPlaceholder('Password');
+  const errorText = page.locator('#usernameError, #passwordError, #idTD_Error, [role="alert"]').first();
+  await Promise.race([
+    passwordInput.waitFor({ state: 'visible', timeout: 45 * 1000 }),
+    errorText.waitFor({ state: 'visible', timeout: 45 * 1000 }),
+    waitUntilOffLoginHost(page, 45 * 1000)
+  ]).catch(() => {});
+
+  if (!onLoginHost(page)) {
+    console.log('[microsoft-login] Signed in via single sign-on after the username step.');
+    return;
+  }
+
+  await assertNoSignInError(page, 'username');
+  await assertNoBlockingInterstitial(page);
+
+  if (!(await passwordInput.isVisible().catch(() => false))) {
+    const heading = ((await page.locator('h1, h2, [role="heading"]').first().textContent().catch(() => '')) || '').trim();
+    throw new Error(
+      `Password field never appeared after submitting the username. Current URL: ${page.url()}` +
+        (heading ? ` | On-screen heading: "${heading}"` : '') +
+        '. A redirect away from Microsoft to another identity provider means the tenant is federated, ' +
+        'which this scripted flow does not handle.'
+    );
+  }
+
+  await passwordInput.fill(password);
   await page.getByRole('button', { name: 'Sign in' }).click();
   await assertNoSignInError(page, 'password');
   await assertNoBlockingInterstitial(page);
