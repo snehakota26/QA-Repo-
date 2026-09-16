@@ -114,7 +114,6 @@ jobs:
       has_azure: ${{ steps.check.outputs.has_azure }}
       has_data_access: ${{ steps.check.outputs.has_data_access }}
       has_org_token: ${{ steps.check.outputs.has_org_token }}
-      has_totp: ${{ steps.check.outputs.has_totp }}
     steps:
       # Secrets can't be read in "if:" conditions, but they can be read as step env vars,
       # so their presence is converted into job outputs for downstream jobs to gate on.
@@ -128,9 +127,6 @@ jobs:
           SERVICE_BUS_CONNECTION: ${{ secrets.SERVICE_BUS_CONNECTION }}
           STORAGE_SAS_URL: ${{ secrets.STORAGE_SAS_URL }}
           STORAGE_CONNECTION_STRING: ${{ secrets.STORAGE_CONNECTION_STRING }}
-          AZURE_PORTAL_USERNAME: ${{ secrets.AZURE_PORTAL_USERNAME }}
-          AZURE_PORTAL_PASSWORD: ${{ secrets.AZURE_PORTAL_PASSWORD }}
-          TOTP_SECRET: ${{ secrets.TOTP_SECRET }}
         run: |
           # Federated identity - preferred, nothing stored and nothing expires.
           has_azure=false
@@ -154,16 +150,10 @@ jobs:
           has_org_token=false
           if [ -n "$ORG_REPO_TOKEN" ]; then has_org_token=true; fi
 
-          has_totp=false
-          if [ -n "$AZURE_PORTAL_USERNAME" ] && [ -n "$AZURE_PORTAL_PASSWORD" ] && [ -n "$TOTP_SECRET" ]; then
-            has_totp=true
-          fi
-
           {
             echo "has_azure=$has_azure"
             echo "has_data_access=$has_data_access"
             echo "has_org_token=$has_org_token"
-            echo "has_totp=$has_totp"
           } >> "$GITHUB_OUTPUT"
 
           {
@@ -173,12 +163,8 @@ jobs:
             echo "| Connection string / SAS fallback | $has_shared_secret |"
             echo "| Azure data-plane access (either of the above) | $has_data_access |"
             echo "| ORG_REPO_TOKEN (private sibling repos) | $has_org_token |"
-            echo "| Azure Portal TOTP sign-in | $has_totp |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-          if [ "$has_totp" != "true" ]; then
-            echo "::warning::Azure Portal TOTP sign-in is not configured - the azure-portal-e2e job will be skipped. Set AZURE_PORTAL_USERNAME, AZURE_PORTAL_PASSWORD and TOTP_SECRET."
-          fi
           if [ "$has_data_access" != "true" ]; then
             echo "::warning::No Azure data-plane credentials configured - the Azure jobs will be skipped. Set AZURE_CLIENT_ID/AZURE_TENANT_ID (OIDC), or SERVICE_BUS_CONNECTION plus STORAGE_SAS_URL."
           fi
@@ -276,58 +262,6 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: mcp-server
         run: cat func.log || true
-
-  azure-portal-e2e:
-    name: "Cope Pipeline E2E (Azure Portal) [${{ inputs.environment || 'dev' }}]"
-    # Runs on every push/PR. Signs in with a real TOTP code generated per run, so there is no
-    # session to expire and nothing to refresh manually. Requires a dedicated automation
-    # account (AZURE_PORTAL_USERNAME/AZURE_PORTAL_PASSWORD/TOTP_SECRET) with:
-    #   - the "Software OATH token" / authenticator app MFA method enrolled,
-    #   - a password set to never expire,
-    #   - exclusion from Conditional Access rules that require a compliant/managed device or
-    #     a named IP range, since GitHub-hosted runners have neither.
-    # See README-BDD.md for the one-time setup. Skips when those secrets aren't configured.
-    needs: preflight
-    if: ${{ needs.preflight.outputs.has_totp == 'true' && needs.preflight.outputs.has_data_access == 'true' }}
-    timeout-minutes: 15
-    runs-on: ubuntu-latest
-    environment: ${{ inputs.environment || 'dev' }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: lts/*
-      - name: Install dependencies
-        run: npm ci
-      - name: Install Playwright Browsers
-        run: npx playwright install --with-deps chromium
-
-      - name: Run Cope pipeline E2E (Azure Portal)
-        env:
-          AZURE_PORTAL_HEADLESS: 'true'
-          # A fresh MFA code is generated per run - no stored session, nothing to expire.
-          AZURE_PORTAL_USERNAME: ${{ secrets.AZURE_PORTAL_USERNAME }}
-          AZURE_PORTAL_PASSWORD: ${{ secrets.AZURE_PORTAL_PASSWORD }}
-          TOTP_SECRET: ${{ secrets.TOTP_SECRET }}
-          # Federated (OIDC) auth for the Service Bus/Blob assertions in the same scenario,
-          # with connection string / SAS as the no-admin-required fallback.
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID || vars.AZURE_CLIENT_ID }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID || vars.AZURE_TENANT_ID }}
-          SERVICE_BUS_CONNECTION: ${{ secrets.SERVICE_BUS_CONNECTION }}
-          STORAGE_SAS_URL: ${{ secrets.STORAGE_SAS_URL }}
-          STORAGE_CONNECTION_STRING: ${{ secrets.STORAGE_CONNECTION_STRING }}
-          # Environment-specific resource names (Settings > Environments > Variables)
-          SERVICE_BUS_NAMESPACE_FQDN: ${{ vars.SERVICE_BUS_NAMESPACE_FQDN || 'cope-pocsb.servicebus.windows.net' }}
-          STORAGE_ACCOUNT_URL: ${{ vars.STORAGE_ACCOUNT_URL || 'https://copepocsa.blob.core.windows.net' }}
-          COPE_QUEUE_NAME: ${{ vars.COPE_QUEUE_NAME || 'cope-requests' }}
-        run: npm run test:integration:azure-portal
-
-      - uses: actions/upload-artifact@v4
-        if: ${{ !cancelled() }}
-        with:
-          name: cope-e2e-test-results
-          path: test-results/
-          retention-days: 14
 
   cope-pipeline-e2e:
     name: "Cope Pipeline E2E (headless, Azure SDK) [${{ inputs.environment || 'dev' }}]"

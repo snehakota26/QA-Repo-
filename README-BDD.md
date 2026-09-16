@@ -111,19 +111,19 @@ az ad app federated-credential create --id <APP_OBJECT_ID> --parameters '{
 
 Add a second credential with `"subject": "repo:<owner>/<repo>:pull_request"` so PR runs work too. Then set `AZURE_CLIENT_ID` and `AZURE_TENANT_ID` as repository variables (no secret needed) and grant the service principal `Azure Service Bus Data Sender` on the queue and `Storage Blob Data Reader` on the container. The workflow already declares `permissions: id-token: write`.
 
-### 2. Azure Portal UI - TOTP
+### 2. Azure Portal UI - manual only, not in CI
 
-The portal scenario needs a real user, so it signs in with a dedicated automation account and generates a fresh RFC 6238 code per run (`specs/support/totp.js`). There is no captured session, so there is nothing to refresh.
+The `@azure-portal` scenario drives the same business flow through the portal. It asserts nothing the headless scenario does not already cover - only that the portal renders - so it is **excluded from CI** and kept for local, on-demand runs:
 
-Set `AZURE_PORTAL_USERNAME`, `AZURE_PORTAL_PASSWORD` and `TOTP_SECRET` as secrets. The account must have:
+```powershell
+npm run test:integration:azure-portal
+```
 
-- the **Software OATH token** (authenticator app) MFA method enrolled - capture the base32 secret shown during enrollment and store it as `TOTP_SECRET`;
-- a password set to **never expire**;
-- **exclusion from Conditional Access policies** that require a compliant or hybrid-joined device, or a named IP range - GitHub-hosted runners satisfy neither. This is the most common cause of a green local run and a red CI run.
+It needs an interactive Entra sign-in. On an Entra-joined machine single sign-on completes automatically and no credentials are required. Elsewhere, set `AZURE_PORTAL_USERNAME`, `AZURE_PORTAL_PASSWORD` and `TOTP_SECRET` (an authenticator seed, see `specs/support/totp.js`) and a code is generated per run.
 
-Sign-in failures now surface the on-screen Entra message (forced MFA re-registration, expired password, push-notification enforcement, Conditional Access block) instead of timing out after 60 seconds with no explanation.
+Automating this in CI was attempted and abandoned: the tenant presents a FIDO2/passkey prompt to GitHub runners, and scripting around phishing-resistant sign-in would mean putting a real account's password and a permanent MFA bypass into GitHub secrets for no additional coverage.
 
-The captured storage state (`npm run auth:azure-portal`) still exists as a local-development convenience so you don't re-authenticate on every local run. CI refuses to use it - it expires within hours, so relying on it guarantees a red build eventually.
+The captured storage state (`npm run auth:azure-portal`) remains a local convenience so you don't re-authenticate on every local run.
 
 ### 3. Fallback when you don't have Entra admin rights
 
@@ -152,10 +152,8 @@ environment drift on quiet days.
   (read access to the private `allata-llc/mcp-server` and `allata-llc/pipeline-function`
   repos); skips rather than fails when absent, e.g. on fork PRs.
 - **`cope-pipeline-e2e`** - `test:integration:cope-e2e`, the browserless end-to-end scenario
-  (Service Bus -> Foundry -> Blob) over the Azure SDK with OIDC auth. No browser, no user
-  sign-in, no MFA, no stored secret. This is the job that actually proves the pipeline works.
-- **`azure-portal-e2e`** - the `@azure-portal` scenario, driving the real Portal UI headless
-  with TOTP sign-in. Adds UI coverage on top of the headless job.
+  (Service Bus -> Foundry -> Blob) over the Azure SDK. No browser, no user sign-in, no MFA.
+  This is the job that proves the pipeline works.
 - **`live-pipeline`** - manual only, via `workflow_dispatch` with the `run_live_pipeline`
   input checked. Publishes a real message to the `cope-requests` queue.
 

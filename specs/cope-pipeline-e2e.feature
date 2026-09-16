@@ -13,7 +13,11 @@ Feature: Cope pipeline end-to-end automation
     Then an output blob for the request is written to storage account "copepocsa" within 180 seconds
     And the output blob content is valid JSON
 
-  @azure-portal @ui @manual-auth
+  # Manual only: the same business flow driven through the portal UI. It asserts nothing the
+  # headless scenario above does not already cover - only that the portal renders - and it
+  # needs an interactive Entra sign-in, so it is excluded from CI.
+  # Run locally with: npm run test:integration:azure-portal
+  @azure-portal @ui @manual
   Scenario: Navigate to the cope-requests queue in the Azure Portal
     Given I am signed in to the Azure Portal
     When I select the subscription "1e398626-ee78-481a-be48-9c7eaae00575"
