@@ -97,6 +97,21 @@ async function chooseSignInMethod(page, optionPattern) {
   return false;
 }
 
+// Guessing at Entra's markup across tenants is unreliable, so when the expected control is
+// missing report what is actually clickable on the page.
+async function visibleClickableLabels(page) {
+  return page
+    .locator('a, button, [role="button"], [role="link"], input[type="submit"]')
+    .evaluateAll(nodes =>
+      nodes
+        .filter(n => n.offsetParent !== null)
+        .map(n => (n.innerText || n.value || n.getAttribute('aria-label') || '').trim())
+        .filter(Boolean)
+        .slice(0, 20)
+    )
+    .catch(() => []);
+}
+
 async function signInWithTotp(page, { username, password, totpSecret }) {
   await page.goto('https://portal.azure.com/#home');
 
@@ -142,9 +157,11 @@ async function signInWithTotp(page, { username, password, totpSecret }) {
 
   if (!(await passwordInput.isVisible().catch(() => false))) {
     const heading = ((await page.locator('h1, h2, [role="heading"]').first().textContent().catch(() => '')) || '').trim();
+    const labels = await visibleClickableLabels(page);
     throw new Error(
       `Password field never appeared after submitting the username. Current URL: ${page.url()}` +
         (heading ? ` | On-screen heading: "${heading}"` : '') +
+        ` | Clickable elements on the page: ${labels.length ? labels.map(l => `"${l}"`).join(', ') : '(none found)'}` +
         '. If the tenant requires phishing-resistant (FIDO2/passkey) sign-in with no password ' +
         'fallback, this flow cannot be scripted.'
     );
