@@ -46,8 +46,16 @@ function buildServiceBusClient() {
 function buildBlobServiceClient() {
   const sasUrl = process.env.STORAGE_SAS_URL?.trim();
   if (sasUrl) {
+    const url = new URL(sasUrl);
+    // The portal hands out a container SAS URL that includes the container path, but
+    // BlobServiceClient expects the account endpoint alone - otherwise the container name
+    // gets appended twice and every request 404s.
+    if (url.pathname && url.pathname !== '/') {
+      log(`Blob Storage: ignoring container path "${url.pathname}" in STORAGE_SAS_URL.`);
+      url.pathname = '';
+    }
     log('Blob Storage: using STORAGE_SAS_URL.');
-    return new BlobServiceClient(sasUrl);
+    return new BlobServiceClient(url.toString());
   }
   const connection = process.env.STORAGE_CONNECTION_STRING?.trim();
   if (connection) {
