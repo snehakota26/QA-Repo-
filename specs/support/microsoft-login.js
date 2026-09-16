@@ -52,15 +52,41 @@ async function assertNoBlockingInterstitial(page) {
   }
 }
 
-const LOGIN_HOST = 'login.microsoftonline.com';
+const PORTAL_URL_PART = 'portal.azure.com';
 
-const onLoginHost = page => page.url().includes(LOGIN_HOST);
+// Reaching the portal is the only reliable "authenticated" signal: the sign-in journey spans
+// several Microsoft hosts (login.microsoftonline.com, login.microsoft.com for the FIDO
+// bridge), so "left the login host" wrongly reports success midway through.
+const onPortal = page => page.url().includes(PORTAL_URL_PART);
 
-// Entra-joined machines complete sign-in via Seamless SSO without ever showing the password
-// prompt, while CI runners always have to type it. Leaving the login host is the signal that
-// authentication finished, whichever route it took.
-function waitUntilOffLoginHost(page, timeout) {
-  return page.waitForURL(url => !String(url).includes(LOGIN_HOST), { timeout });
+function waitUntilOnPortal(page, timeout) {
+  return page.waitForURL(url => String(url).includes(PORTAL_URL_PART), { timeout });
+}
+
+// Passkey-first tenants open a FIDO prompt instead of asking for a password, and offer the
+// other methods behind a "Sign in another way" link leading to a "Choose a way to sign in"
+// list. Walk that path to reach the requested method.
+async function chooseSignInMethod(page, optionPattern) {
+  const option = page
+    .getByRole('button', { name: optionPattern })
+    .or(page.getByRole('link', { name: optionPattern }))
+    .or(page.getByText(optionPattern));
+  const anotherWayPattern = /sign in another way|other ways to sign in|use another method|more ways to sign in|having trouble/i;
+  const anotherWay = page
+    .getByRole('link', { name: anotherWayPattern })
+    .or(page.getByRole('button', { name: anotherWayPattern }));
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (await option.first().isVisible({ timeout: 5 * 1000 }).catch(() => false)) {
+      await option.first().click();
+      return true;
+    }
+    if (!(await anotherWay.first().isVisible({ timeout: 5 * 1000 }).catch(() => false))) {
+      return false;
+    }
+    await anotherWay.first().click();
+  }
+  return false;
 }
 
 async function signInWithTotp(page, { username, password, totpSecret }) {
@@ -73,7 +99,7 @@ async function signInWithTotp(page, { username, password, totpSecret }) {
     .catch(() => false);
 
   if (!sawEmailPrompt) {
-    if (!onLoginHost(page)) {
+    if (onPortal(page)) {
       console.log('[microsoft-login] Already signed in (single sign-on) - no credentials needed.');
       return;
     }
@@ -88,15 +114,22 @@ async function signInWithTotp(page, { username, password, totpSecret }) {
   await Promise.race([
     passwordInput.waitFor({ state: 'visible', timeout: 45 * 1000 }),
     errorText.waitFor({ state: 'visible', timeout: 45 * 1000 }),
-    waitUntilOffLoginHost(page, 45 * 1000)
+    waitUntilOnPortal(page, 45 * 1000)
   ]).catch(() => {});
 
-  if (!onLoginHost(page)) {
+  if (onPortal(page)) {
     console.log('[microsoft-login] Signed in via single sign-on after the username step.');
     return;
   }
 
   await assertNoSignInError(page, 'username');
+
+  if (!(await passwordInput.isVisible().catch(() => false))) {
+    console.log('[microsoft-login] Password prompt not shown - selecting the password method.');
+    await chooseSignInMethod(page, /use my password|use your password/i);
+    await passwordInput.waitFor({ state: 'visible', timeout: 45 * 1000 }).catch(() => {});
+  }
+
   await assertNoBlockingInterstitial(page);
 
   if (!(await passwordInput.isVisible().catch(() => false))) {
@@ -104,8 +137,8 @@ async function signInWithTotp(page, { username, password, totpSecret }) {
     throw new Error(
       `Password field never appeared after submitting the username. Current URL: ${page.url()}` +
         (heading ? ` | On-screen heading: "${heading}"` : '') +
-        '. A redirect away from Microsoft to another identity provider means the tenant is federated, ' +
-        'which this scripted flow does not handle.'
+        '. If the tenant requires phishing-resistant (FIDO2/passkey) sign-in with no password ' +
+        'fallback, this flow cannot be scripted.'
     );
   }
 
@@ -114,13 +147,12 @@ async function signInWithTotp(page, { username, password, totpSecret }) {
   await assertNoSignInError(page, 'password');
   await assertNoBlockingInterstitial(page);
 
-  // Some tenants show a "verify your identity" method chooser before the code input.
-  const useCodeLink = page.getByRole('link', { name: /use a verification code|use another method|more ways to sign in/i });
-  if (await useCodeLink.isVisible({ timeout: 10 * 1000 }).catch(() => false)) {
-    await useCodeLink.click();
+  const codeInput = page.getByPlaceholder(/code/i).first();
+  if (!(await codeInput.isVisible({ timeout: 10 * 1000 }).catch(() => false))) {
+    console.log('[microsoft-login] Code prompt not shown - selecting the verification code method.');
+    await chooseSignInMethod(page, /verification code|authenticator app|enter a code/i);
   }
 
-  const codeInput = page.getByPlaceholder(/code/i).first();
   await codeInput.waitFor({ state: 'visible', timeout: 60 * 1000 });
 
   // Never submit a code that is about to rotate - otherwise it can expire between being
