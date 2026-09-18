@@ -8,7 +8,8 @@ Feature: Publish to the cope Service Bus queues with a SAS token over REST
 
   Note: "bulk-send-key" is a queue-scoped policy, so each queue has its own key. They are read
   from SERVICE_BUS_SAS_KEY_COPE_REQUESTS and SERVICE_BUS_SAS_KEY_COPE_REQUESTS_DEV; a token signed
-  with the wrong queue's key returns 401.
+  with the wrong queue's key returns 401. @sas is excluded from the cope-e2e job, which needs only
+  Azure SDK credentials, so keep that tag on every scenario here.
 
   Background:
     Given the Service Bus SAS integration is configured for namespace "cope-pocsb"
