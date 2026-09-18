@@ -114,6 +114,7 @@ jobs:
       has_azure: ${{ steps.check.outputs.has_azure }}
       has_data_access: ${{ steps.check.outputs.has_data_access }}
       has_org_token: ${{ steps.check.outputs.has_org_token }}
+      has_sas: ${{ steps.check.outputs.has_sas }}
     steps:
       # Secrets can't be read in "if:" conditions, but they can be read as step env vars,
       # so their presence is converted into job outputs for downstream jobs to gate on.
@@ -127,6 +128,8 @@ jobs:
           SERVICE_BUS_CONNECTION: ${{ secrets.SERVICE_BUS_CONNECTION }}
           STORAGE_SAS_URL: ${{ secrets.STORAGE_SAS_URL }}
           STORAGE_CONNECTION_STRING: ${{ secrets.STORAGE_CONNECTION_STRING }}
+          SERVICE_BUS_SAS_KEY_COPE_REQUESTS: ${{ secrets.SERVICE_BUS_SAS_KEY_COPE_REQUESTS }}
+          SERVICE_BUS_SAS_KEY_COPE_REQUESTS_DEV: ${{ secrets.SERVICE_BUS_SAS_KEY_COPE_REQUESTS_DEV }}
         run: |
           # Federated identity - preferred, nothing stored and nothing expires.
           has_azure=false
@@ -150,10 +153,20 @@ jobs:
           has_org_token=false
           if [ -n "$ORG_REPO_TOKEN" ]; then has_org_token=true; fi
 
+          # Queue-scoped "bulk-send-key" primary keys, one per queue. The Send claim cannot
+          # peek, so the peek-back assertion still needs data-plane (Listen) access.
+          has_sas=false
+          if [ -n "$SERVICE_BUS_SAS_KEY_COPE_REQUESTS" ] \
+            && [ -n "$SERVICE_BUS_SAS_KEY_COPE_REQUESTS_DEV" ] \
+            && [ "$has_data_access" = "true" ]; then
+            has_sas=true
+          fi
+
           {
             echo "has_azure=$has_azure"
             echo "has_data_access=$has_data_access"
             echo "has_org_token=$has_org_token"
+            echo "has_sas=$has_sas"
           } >> "$GITHUB_OUTPUT"
 
           {
@@ -163,6 +176,7 @@ jobs:
             echo "| Connection string / SAS fallback | $has_shared_secret |"
             echo "| Azure data-plane access (either of the above) | $has_data_access |"
             echo "| ORG_REPO_TOKEN (private sibling repos) | $has_org_token |"
+            echo "| Service Bus bulk-send-key SAS keys | $has_sas |"
           } >> "$GITHUB_STEP_SUMMARY"
 
           if [ "$has_data_access" != "true" ]; then
@@ -296,6 +310,37 @@ jobs:
           STORAGE_ACCOUNT_URL: ${{ vars.STORAGE_ACCOUNT_URL || 'https://copepocsa.blob.core.windows.net' }}
           COPE_QUEUE_NAME: ${{ vars.COPE_QUEUE_NAME || 'cope-requests' }}
         run: npm run test:integration:cope-e2e
+
+  cope-sas:
+    name: "Cope SAS over REST (bulk-send-key) [${{ inputs.environment || 'dev' }}]"
+    # Signs a queue-scoped SAS token locally and publishes over plain HTTP - the headless
+    # equivalent of copying bulk-send-key out of the portal. Skips (does not fail) when the
+    # per-queue keys are not configured, since they are queue-scoped shared secrets.
+    needs: preflight
+    if: ${{ needs.preflight.outputs.has_sas == 'true' }}
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment || 'dev' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run SAS-over-REST scenarios
+        env:
+          SERVICE_BUS_NAMESPACE_FQDN: ${{ vars.SERVICE_BUS_NAMESPACE_FQDN || 'cope-pocsb.servicebus.windows.net' }}
+          SERVICE_BUS_SAS_KEY_NAME: ${{ vars.SERVICE_BUS_SAS_KEY_NAME || 'bulk-send-key' }}
+          SERVICE_BUS_SAS_KEY_COPE_REQUESTS: ${{ secrets.SERVICE_BUS_SAS_KEY_COPE_REQUESTS }}
+          SERVICE_BUS_SAS_KEY_COPE_REQUESTS_DEV: ${{ secrets.SERVICE_BUS_SAS_KEY_COPE_REQUESTS_DEV }}
+          # Peeking needs Listen, which bulk-send-key does not grant.
+          SERVICE_BUS_LISTEN_CONNECTION: ${{ secrets.SERVICE_BUS_LISTEN_CONNECTION }}
+          SERVICE_BUS_CONNECTION: ${{ secrets.SERVICE_BUS_CONNECTION }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID || vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID || vars.AZURE_TENANT_ID }}
+        run: npm run test:integration:cope-sas
 
   live-pipeline:
     name: "Live Pipeline Test (manual, hits real Service Bus) [${{ inputs.environment || 'dev' }}]"
