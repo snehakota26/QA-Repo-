@@ -130,6 +130,7 @@ jobs:
           STORAGE_CONNECTION_STRING: ${{ secrets.STORAGE_CONNECTION_STRING }}
           SERVICE_BUS_SAS_KEY_COPE_REQUESTS: ${{ secrets.SERVICE_BUS_SAS_KEY_COPE_REQUESTS }}
           SERVICE_BUS_SAS_KEY_COPE_REQUESTS_DEV: ${{ secrets.SERVICE_BUS_SAS_KEY_COPE_REQUESTS_DEV }}
+          SERVICE_BUS_LISTEN_CONNECTION: ${{ secrets.SERVICE_BUS_LISTEN_CONNECTION }}
         run: |
           # Federated identity - preferred, nothing stored and nothing expires.
           has_azure=false
@@ -154,11 +155,12 @@ jobs:
           if [ -n "$ORG_REPO_TOKEN" ]; then has_org_token=true; fi
 
           # Queue-scoped "bulk-send-key" primary keys, one per queue. The Send claim cannot
-          # peek, so the peek-back assertion still needs data-plane (Listen) access.
+          # peek, and SERVICE_BUS_CONNECTION here is an entity-scoped send-only string, so the
+          # peek-back assertion needs its own namespace-level Listen credential.
           has_sas=false
           if [ -n "$SERVICE_BUS_SAS_KEY_COPE_REQUESTS" ] \
             && [ -n "$SERVICE_BUS_SAS_KEY_COPE_REQUESTS_DEV" ] \
-            && [ "$has_data_access" = "true" ]; then
+            && { [ -n "$SERVICE_BUS_LISTEN_CONNECTION" ] || [ "$has_azure" = "true" ]; }; then
             has_sas=true
           fi
 

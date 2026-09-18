@@ -80,10 +80,18 @@ function brokerProperties({ messageId, correlationId, label }) {
 }
 
 function createPeekClient(env = process.env, namespaceName) {
-  const connection =
-    env.SERVICE_BUS_LISTEN_CONNECTION?.trim() || env.SERVICE_BUS_CONNECTION?.trim();
+  const listenConnection = env.SERVICE_BUS_LISTEN_CONNECTION?.trim();
+  if (listenConnection) {
+    return { client: new ServiceBusClient(listenConnection), authMode: 'listen connection string' };
+  }
 
+  const connection = env.SERVICE_BUS_CONNECTION?.trim();
   if (connection) {
+    // An EntityPath pins the client to one queue, so it cannot peek any other.
+    assert.ok(
+      !/(^|;)\s*EntityPath\s*=/i.test(connection),
+      'SERVICE_BUS_CONNECTION is scoped to a single entity (EntityPath=...) and cannot peek other queues. Set SERVICE_BUS_LISTEN_CONNECTION to a namespace-level connection string whose policy has the Listen claim.'
+    );
     return { client: new ServiceBusClient(connection), authMode: 'connection string' };
   }
 
