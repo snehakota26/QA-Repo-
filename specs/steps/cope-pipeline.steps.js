@@ -108,6 +108,7 @@ Then('an output blob for the request is written to storage account {string} with
   this.copeOutputContainerName = outputContainerName();
   const containerClient = this.blobServiceClient.getContainerClient(this.copeOutputContainerName);
   const prefix = `${this.copeCorrelationId}_`;
+  const earliestExpectedBlobTime = this.copePublishedAt.getTime() - 60 * 1000;
 
   log(`Polling container "${this.copeOutputContainerName}" for a blob prefixed "${prefix}" (timeout ${timeoutSeconds}s)...`);
   let outputBlobName = null;
@@ -115,7 +116,7 @@ Then('an output blob for the request is written to storage account {string} with
   while (Date.now() < deadline && !outputBlobName) {
     attempt += 1;
     for await (const blob of containerClient.listBlobsFlat({ prefix })) {
-      if (new Date(blob.properties.lastModified) >= this.copePublishedAt) {
+      if (new Date(blob.properties.lastModified).getTime() >= earliestExpectedBlobTime) {
         outputBlobName = blob.name;
         break;
       }
